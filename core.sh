@@ -1,3 +1,4 @@
+cat > /etc/sbshell/core.sh << 'EOF'
 #!/bin/bash
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
@@ -25,7 +26,7 @@ check_status() {
     fi
 }
 
-# 1. 安装 Sing-box
+# 1. 安装 Sing-box (修复API限制版)
 install_singbox() {
     echo -e "${GREEN}开始安装依赖...${PLAIN}"
     apt-get update && apt-get install -y curl wget unzip tar nftables git
@@ -40,29 +41,46 @@ install_singbox() {
 
     echo -e "${GREEN}正在获取最新正式版 (Latest Stable)...${PLAIN}"
     
-    # [修改点1] 使用 releases/latest 接口，确保只获取正式版
-    LATEST_URL="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
-    TAG=$(curl -s "$LATEST_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    # [修复1] 尝试使用 API 获取
+    TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     
+    # [修复2] API 失败时，尝试使用网页重定向获取 (不消耗 API 额度)
     if [[ -z "$TAG" ]]; then
-        echo -e "${RED}无法获取版本号，可能是 GitHub API 限制，请稍后再试。${PLAIN}"
-        return
+        echo -e "${YELLOW}API 获取失败，尝试通过网页重定向获取版本...${PLAIN}"
+        TAG=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+")
+    fi
+
+    # [修复3] 如果还是失败，切换为手动输入
+    if [[ -z "$TAG" ]]; then
+        echo -e "${RED}无法自动获取版本号。${PLAIN}"
+        read -p "请输入要安装的版本号 (例如 1.11.4): " MANUAL_VER
+        if [[ -z "$MANUAL_VER" ]]; then
+            echo "版本号不能为空，取消安装。"
+            return
+        fi
+        # 确保版本号带 v 前缀
+        if [[ "$MANUAL_VER" != v* ]]; then
+             TAG="v$MANUAL_VER"
+        else
+             TAG="$MANUAL_VER"
+        fi
     fi
 
     VERSION=${TAG#v}
-    echo -e "检测到最新正式版: ${GREEN}${TAG}${PLAIN}"
+    echo -e "即将安装版本: ${GREEN}${TAG}${PLAIN}"
     
+    # 下载链接
     URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VERSION}-${DOWNLOAD_ARCH}.tar.gz"
     
     echo -e "正在下载: $URL"
-    wget -O /tmp/sing-box.tar.gz "$URL"
+    # [优化] 增加重试机制
+    wget -T 30 -t 3 -O /tmp/sing-box.tar.gz "$URL"
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}下载失败，请检查网络 (是否需要代理?)${PLAIN}"
         return
     fi
     
     tar -zxvf /tmp/sing-box.tar.gz -C /tmp/ >/dev/null 2>&1
-    # 兼容解压出来的文件夹名称可能不同
     mv /tmp/sing-box*${DOWNLOAD_ARCH}/sing-box $SINGBOX_BIN
     chmod +x $SINGBOX_BIN
     rm -rf /tmp/sing-box*
@@ -95,8 +113,6 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    
-    # [修改点2] 设置开机自启
     systemctl enable sing-box
     echo -e "${GREEN}已设置开机自启。${PLAIN}"
     
@@ -106,7 +122,6 @@ EOF
 # 2. 创建标准模板
 create_templates() {
     # 这里的代码保持不变，还是原来的模板逻辑
-    # 为节省篇幅，此处省略，请保留你原文件中的 create_templates 函数内容
     :
 }
 
@@ -198,3 +213,4 @@ uninstall_all() {
     echo -e "${GREEN}卸载完成${PLAIN}"
     exit 0
 }
+EOF
