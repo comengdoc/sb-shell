@@ -16,8 +16,8 @@ WORKDIR="/etc/sbshell"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
-PLAIN='\033[0m'
 CYAN='\033[0;36m'
+PLAIN='\033[0m'
 
 # --- 检查运行状态 ---
 check_status() {
@@ -90,11 +90,11 @@ install_singbox() {
     fi
     
     tar -zxvf /tmp/sing-box.tar.gz -C /tmp/ >/dev/null 2>&1
-    mv /tmp/sing-box*${DOWNLOAD_ARCH}/sing-box $SINGBOX_BIN
-    chmod +x $SINGBOX_BIN
+    mv /tmp/sing-box*${DOWNLOAD_ARCH}/sing-box "$SINGBOX_BIN"
+    chmod +x "$SINGBOX_BIN"
     rm -rf /tmp/sing-box*
 
-    mkdir -p $CONFIG_DIR $TEMPLATE_DIR
+    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR"
 
     # 写入 Systemd 服务文件 (强制 User=root 和 Capabilities)
     cat > $SERVICE_FILE <<SYSTEMD
@@ -152,6 +152,7 @@ stop_service() {
 }
 
 restart_service() { start_service; }
+
 show_log() { journalctl -u sing-box -f -n 50; }
 
 switch_mode() {

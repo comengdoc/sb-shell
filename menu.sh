@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box 客户端管理主菜单 (修复版)
+#  Sing-box 客户端管理主菜单 (优化版)
 # ==========================================
 
-# 1. 强制定义核心路径 (修复报错的核心)
+# 1. 强制定义核心路径
 WORKDIR="/etc/sbshell"
 BACKUP_DIR="/root/sb-shell-backups"
 LINK_FILE="/usr/local/bin/sbshell"
@@ -13,8 +13,8 @@ LINK_FILE="/usr/local/bin/sbshell"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
-PLAIN='\033[0m'
 CYAN='\033[0;36m'
+PLAIN='\033[0m'
 
 # 3. 加载核心模块 (带容错)
 if [ -f "$WORKDIR/core.sh" ]; then
@@ -42,10 +42,13 @@ uninstall_all() {
     echo -e "${RED}确定要彻底卸载 sbshell 吗? [y/N]${PLAIN}"
     read -p ": " confirm
     [[ "$confirm" != "y" ]] && return
+    
     stop_service 2>/dev/null
     systemctl disable sing-box 2>/dev/null
+    
     rm -f "$SERVICE_FILE" "$SINGBOX_BIN" "$LINK_FILE"
     rm -rf "$CONFIG_DIR" "$WORKDIR" "$BACKUP_DIR"
+    
     echo -e "${GREEN}卸载完成。${PLAIN}"
     exit 0
 }
@@ -94,4 +97,6 @@ menu() {
     read -p "按回车键返回..." 
     menu
 }
+
+# 启动菜单
 menu
