@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box 核心函数库 (core.sh)
+#  Sing-box 核心函数库 (权限修复增强版)
 # ==========================================
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
@@ -17,17 +17,16 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 PLAIN='\033[0m'
+CYAN='\033[0;36m'
 
-# --- 检查运行状态 (修复版：带版本号) ---
+# --- 检查运行状态 ---
 check_status() {
-    # 1. 获取运行状态
     if systemctl is-active --quiet sing-box; then
         STATUS="${GREEN}运行中${PLAIN}"
     else
         STATUS="${RED}未运行${PLAIN}"
     fi
 
-    # 2. 获取版本号
     if [ -f "$SINGBOX_BIN" ]; then
         VER=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
         [ -z "$VER" ] && VER="未知"
@@ -35,10 +34,24 @@ check_status() {
         VER="${RED}未安装${PLAIN}"
     fi
 
+    if systemctl is-enabled --quiet sing-box 2>/dev/null; then
+        AUTOSTART="${GREEN}已开启${PLAIN}"
+    else
+        AUTOSTART="${RED}未开启${PLAIN}"
+    fi
+
+    MODE_RAW=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
+    if [ "$MODE_RAW" == "TUN" ]; then
+         MODE_DISPLAY="${CYAN}TUN 模式${PLAIN}"
+    else
+         MODE_DISPLAY="${YELLOW}TProxy 模式${PLAIN}"
+    fi
+
     echo -e "运行状态: ${STATUS}  |  当前版本: ${GREEN}${VER}${PLAIN}"
+    echo -e "开机自启: ${AUTOSTART}  |  工作模式: ${MODE_DISPLAY}"
 }
 
-# --- 安装 Sing-box ---
+# --- 安装 Sing-box (修复权限问题) ---
 install_singbox() {
     echo -e "${GREEN}开始安装依赖...${PLAIN}"
     if command -v apt-get >/dev/null; then
@@ -83,6 +96,7 @@ install_singbox() {
 
     mkdir -p $CONFIG_DIR $TEMPLATE_DIR
 
+    # 写入 Systemd 服务文件 (强制 User=root 和 Capabilities)
     cat > $SERVICE_FILE <<SYSTEMD
 [Unit]
 Description=sing-box service
@@ -90,6 +104,8 @@ Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target network-online.target
 
 [Service]
+User=root
+Group=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=$SINGBOX_BIN run -c $CONFIG_FILE -D $CONFIG_DIR
@@ -108,10 +124,25 @@ SYSTEMD
 }
 
 start_service() {
+    # 强制修复权限：如果二进制文件存在，尝试赋予网络权限
+    if [ -f "$SINGBOX_BIN" ] && command -v setcap >/dev/null; then
+        setcap cap_net_admin,cap_net_bind_service=+ep "$SINGBOX_BIN" 2>/dev/null
+    fi
+
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
     echo -e "正在启动 Sing-box ($MODE 模式)..."
     if [[ "$MODE" == "TPROXY" ]]; then configure_nftables_tproxy; fi
-    if systemctl restart sing-box; then echo -e "${GREEN}服务启动成功${PLAIN}"; else echo -e "${RED}服务启动失败${PLAIN}"; fi
+    
+    # 确保 systemd 配置已重载
+    systemctl daemon-reload
+    
+    if systemctl restart sing-box; then 
+        echo -e "${GREEN}服务启动成功${PLAIN}"
+    else 
+        echo -e "${RED}服务启动失败${PLAIN}"
+        # 自动显示最后几行日志帮助排错
+        journalctl -u sing-box -n 3 --no-pager
+    fi
 }
 
 stop_service() {
