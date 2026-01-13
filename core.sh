@@ -26,12 +26,10 @@ get_current_mode_display() {
     fi
 }
 
-# --- 2. 检查运行状态 (修复菜单报错) ---
+# --- 2. 检查运行状态 (修改版：仅检查服务状态) ---
 check_status() {
     if systemctl is-active --quiet sing-box; then
-        # 尝试获取版本号
-        VER=$($SINGBOX_BIN version 2>/dev/null | head -n 1 | awk '{print $3}')
-        echo -e "运行状态: ${GREEN}已启动${PLAIN} (内核版本: ${VER:-未知})"
+        echo -e "运行状态: ${GREEN}已启动${PLAIN}"
     else
         echo -e "运行状态: ${RED}未运行${PLAIN}"
     fi
