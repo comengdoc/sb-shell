@@ -124,6 +124,12 @@ SYSTEMD
 }
 
 start_service() {
+    # === 新增：强制开启内核转发与标记支持 ===
+    echo -e "正在配置内核转发参数..."
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    sysctl -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1
+
     # 强制修复权限：如果二进制文件存在，尝试赋予网络权限
     if [ -f "$SINGBOX_BIN" ] && command -v setcap >/dev/null; then
         setcap cap_net_admin,cap_net_bind_service=+ep "$SINGBOX_BIN" 2>/dev/null
