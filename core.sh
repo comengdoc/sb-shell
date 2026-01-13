@@ -169,7 +169,7 @@ table ip singbox {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
         ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255, 192.168.0.0/16, 10.0.0.0/8 } return
-        meta l4proto { tcp, udp } meta mark set 1 tproxy to :9888 accept
+        meta l4proto { tcp, udp } meta mark set 1 tproxy to :7895 accept
     }
     chain output {
         type route hook output priority mangle; policy accept;

@@ -2,6 +2,7 @@
 WORKDIR="/etc/sbshell"
 CONFIG_FILE="/etc/sing-box/config.json"
 TEMPLATE_DIR="$WORKDIR/templates"
+PREF_FILE="$WORKDIR/.interface_pref"  # 新增：网卡配置记忆文件
 
 check_jq() {
     if ! command -v jq &> /dev/null; then
@@ -12,6 +13,41 @@ check_jq() {
 
 urlencode() {
     echo -n "$1" | jq -sRr @uri
+}
+
+# === 新增功能：网卡选择交互 ===
+select_interface() {
+    CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
+    
+    echo -e "----------------------------------------------------"
+    if [ -n "$CURRENT_PREF" ]; then
+        echo -e "当前网络出口设定: \033[32m手动指定 ($CURRENT_PREF)\033[0m"
+    else
+        echo -e "当前网络出口设定: \033[32m自动智能检测 (默认)\033[0m"
+    fi
+    
+    echo -e "在多网口/Docker环境下，自动检测可能会失效。"
+    read -p "是否需要更改网卡设定? [y/N]: " CHANGE_IF
+    
+    if [[ "$CHANGE_IF" == "y" ]] || [[ "$CHANGE_IF" == "Y" ]]; then
+        echo -e "\n系统可用物理网卡:"
+        ls /sys/class/net | grep -v "lo" | grep -v "docker" | grep -v "veth"
+        echo -e "----------------------------------------------------"
+        read -p "请输入要绑定的网卡名称 (输入 auto 恢复自动): " INPUT_IF
+        
+        if [[ "$INPUT_IF" == "auto" ]] || [[ -z "$INPUT_IF" ]]; then
+            rm -f "$PREF_FILE"
+            echo -e "\033[32m已恢复为自动检测模式。\033[0m"
+            MANUAL_IF=""
+        else
+            echo "$INPUT_IF" > "$PREF_FILE"
+            echo -e "\033[32m已设定强制出口网卡为: $INPUT_IF\033[0m"
+            MANUAL_IF="$INPUT_IF"
+        fi
+    else
+        MANUAL_IF="$CURRENT_PREF"
+    fi
+    echo -e "----------------------------------------------------"
 }
 
 update_subscription() {
@@ -28,13 +64,15 @@ update_subscription() {
         return
     fi
 
+    # 调用网卡选择逻辑
+    select_interface
+
     PREV_BACKEND=""
     [ -f "$WORKDIR/.backend_url" ] && PREV_BACKEND=$(cat "$WORKDIR/.backend_url")
     echo "请输入转换后端地址 (如 https://singbox.xxx.xyz)"
     echo "注意: 必须是适配 Sing-box-subscribe 的后端"
     read -p "后端地址 [默认: ${PREV_BACKEND:-无}]: " BACKEND_INPUT
     [ -n "$BACKEND_INPUT" ] && BACKEND_URL="$BACKEND_INPUT" || BACKEND_URL="$PREV_BACKEND"
-    # 去除末尾可能存在的斜杠
     BACKEND_URL=${BACKEND_URL%/}
     [ -n "$BACKEND_URL" ] && echo "$BACKEND_URL" > "$WORKDIR/.backend_url"
 
@@ -47,7 +85,7 @@ update_subscription() {
 
     TARGET_URL="$SUB_URL"
     if [[ -n "$BACKEND_URL" ]]; then
-        echo "正在构建转换链接 (sing-box-subscribe 格式)..."
+        echo "正在构建转换链接..."
         ENCODED_SUB=$(urlencode "$SUB_URL")
         TARGET_URL="${BACKEND_URL}/config/${ENCODED_SUB}"
     fi
@@ -61,7 +99,6 @@ update_subscription() {
         rm -f "$DOWNLOAD_TEMP"; return
     fi
     
-    # 尝试解析 JSON
     if ! jq -e . "$DOWNLOAD_TEMP" >/dev/null 2>&1; then
         echo -e "\033[31m下载内容不是有效的 JSON！\033[0m"
         echo "后端返回内容预览:"
@@ -69,18 +106,18 @@ update_subscription() {
         rm -f "$DOWNLOAD_TEMP"; return
     fi
 
-    echo "正在合并配置 (本地正则筛选)..."
+    echo "正在合并配置 (本地正则筛选 + 网卡绑定)..."
     
-    # === JQ 核心修复：增加了 select() 包装器 ===
-    jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" '
+    # === JQ 逻辑更新：注入 manual_if 参数 ===
+    jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" --arg iface "$MANUAL_IF" '
        (if ($remote[0] | type) == "array" then $remote[0] else $remote[0].outbounds end) as $raw_nodes |
        ($raw_nodes | map(select(.type != "selector" and .type != "urltest" and .type != "direct" and .type != "block" and .type != "dns"))) as $nodes |
        
+       # 1. 处理分组筛选 (保持原有逻辑)
        ($tpl[0].outbounds | map(
            if .type == "selector" or .type == "urltest" then
                if .filter then
                    . as $group |
-                   # 修复点：这里增加了 select(...)，确保 $matches 是节点对象数组，而不是布尔值数组
                    ($nodes | map(select(
                        . as $node |
                        (if ($group.filter | map(select(.action == "include")) | length) > 0 then
@@ -91,7 +128,6 @@ update_subscription() {
                            ($group.filter | map(select(.action == "exclude")) | any(.keywords[] as $k | ($node.tag | test($k; "i"))) | not)
                        else true end)
                    ))) as $matches |
-                   
                    {
                        tag: $group.tag,
                        type: $group.type,
@@ -103,10 +139,24 @@ update_subscription() {
                else . end
            else . end
        )) as $processed_groups |
+
+       # 2. 新增逻辑：如果指定了网卡，给所有 Direct 出口绑定网卡
+       ($processed_groups + $nodes | map(
+           if .type == "direct" and $iface != "" then 
+               . + {bind_interface: $iface} 
+           else . end
+       )) as $final_outbounds |
+
+       # 3. 新增逻辑：如果指定了网卡，关闭 DNS 自动检测
+       ($tpl[0].dns | if $iface != "" then . + {auto_detect_interface: false} else . end) as $final_dns |
+
        {
-           log: $tpl[0].log, dns: $tpl[0].dns, inbounds: $tpl[0].inbounds, 
-           route: $tpl[0].route, experimental: $tpl[0].experimental, 
-           outbounds: ($processed_groups + $nodes)
+           log: $tpl[0].log, 
+           dns: $final_dns, 
+           inbounds: $tpl[0].inbounds, 
+           route: $tpl[0].route, 
+           experimental: $tpl[0].experimental, 
+           outbounds: $final_outbounds
        }
        ' > "$FINAL_TEMP"
 
@@ -119,6 +169,6 @@ update_subscription() {
         echo -e "\033[32m服务已重启\033[0m"
     else
         echo -e "\033[31m配置生成失败 (JQ Error)\033[0m"
-        echo "保留临时文件以供检查: $DOWNLOAD_TEMP"
+        rm -f "$DOWNLOAD_TEMP"
     fi
 }
