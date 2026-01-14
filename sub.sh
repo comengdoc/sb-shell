@@ -108,12 +108,13 @@ update_subscription() {
 
     echo "正在合并配置 (本地正则筛选 + 网卡绑定)..."
     
-    # === JQ 逻辑更新：注入 manual_if 参数 ===
+    # === JQ 逻辑更新：修复注入位置错误 ===
+    # 错误修复：auto_detect_interface 必须注入到 route 中，而不是 dns 中
     jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" --arg iface "$MANUAL_IF" '
        (if ($remote[0] | type) == "array" then $remote[0] else $remote[0].outbounds end) as $raw_nodes |
        ($raw_nodes | map(select(.type != "selector" and .type != "urltest" and .type != "direct" and .type != "block" and .type != "dns"))) as $nodes |
        
-       # 1. 处理分组筛选 (保持原有逻辑)
+       # 1. 处理分组筛选
        ($tpl[0].outbounds | map(
            if .type == "selector" or .type == "urltest" then
                if .filter then
@@ -140,21 +141,22 @@ update_subscription() {
            else . end
        )) as $processed_groups |
 
-       # 2. 新增逻辑：如果指定了网卡，给所有 Direct 出口绑定网卡
+       # 2. 网卡绑定：如果指定了网卡，给所有 Direct 出口绑定网卡
        ($processed_groups + $nodes | map(
            if .type == "direct" and $iface != "" then 
                . + {bind_interface: $iface} 
            else . end
        )) as $final_outbounds |
 
-       # 3. 新增逻辑：如果指定了网卡，关闭 DNS 自动检测
-       ($tpl[0].dns | if $iface != "" then . + {auto_detect_interface: false} else . end) as $final_dns |
+       # 3. 关键修复：如果指定了网卡，将 route 中的 auto_detect_interface 设为 false
+       # 注意：这里操作的是 route 对象，而不是 dns 对象
+       ($tpl[0].route | if $iface != "" then . + {auto_detect_interface: false} else . end) as $final_route |
 
        {
            log: $tpl[0].log, 
-           dns: $final_dns, 
+           dns: $tpl[0].dns, 
            inbounds: $tpl[0].inbounds, 
-           route: $tpl[0].route, 
+           route: $final_route, 
            experimental: $tpl[0].experimental, 
            outbounds: $final_outbounds
        }
