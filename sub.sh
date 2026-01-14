@@ -93,8 +93,7 @@ update_subscription() {
 
     echo "正在合并配置..."
     
-    # === JQ 逻辑更新：防环路增强版 ===
-    # 核心修改：给所有非逻辑节点（直连、代理等）绑定网卡
+    # === JQ 逻辑更新：防环路 + 强制 MTU 1500 ===
     jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" --arg iface "$MANUAL_IF" '
        (if ($remote[0] | type) == "array" then $remote[0] else $remote[0].outbounds end) as $raw_nodes |
        ($raw_nodes | map(select(.type != "selector" and .type != "urltest" and .type != "direct" and .type != "block" and .type != "dns"))) as $nodes |
@@ -134,13 +133,16 @@ update_subscription() {
        # 3. 彻底清洗 DNS
        ($tpl[0].dns | del(.auto_detect_interface)) as $clean_dns |
 
-       # 4. 路由配置：依然保持自动检测开启作为双重保险
+       # 4. 路由配置：依然保持自动检测开启
        ($tpl[0].route + {auto_detect_interface: true}) as $final_route |
+
+       # 5. [新增] 强制修复 MTU：无论模板怎么写，这里强制把 TUN 的 MTU 设为 1500
+       ($tpl[0].inbounds | map(if .type == "tun" then . + {mtu: 1500} else . end)) as $final_inbounds |
 
        {
            log: $tpl[0].log, 
            dns: $clean_dns, 
-           inbounds: $tpl[0].inbounds, 
+           inbounds: $final_inbounds, 
            route: $final_route, 
            experimental: $tpl[0].experimental, 
            outbounds: $final_outbounds
