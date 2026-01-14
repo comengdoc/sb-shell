@@ -15,21 +15,26 @@ urlencode() {
     echo -n "$1" | jq -sRr @uri
 }
 
+# === 网卡选择交互 ===
 select_interface() {
     CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
+    
     echo -e "----------------------------------------------------"
     if [ -n "$CURRENT_PREF" ]; then
         echo -e "当前网络出口设定: \033[32m手动指定 ($CURRENT_PREF)\033[0m"
     else
         echo -e "当前网络出口设定: \033[32m自动智能检测 (默认)\033[0m"
     fi
-    echo -e "注意: 手动指定仅影响'直连'流量，代理流量将自动路由。"
+    
+    echo -e "注意: 手动指定将强制所有流量（直连+代理）走此网卡，彻底防止回环。"
     read -p "是否需要更改网卡设定? [y/N]: " CHANGE_IF
+    
     if [[ "$CHANGE_IF" == "y" ]] || [[ "$CHANGE_IF" == "Y" ]]; then
         echo -e "\n系统可用物理网卡:"
         ls /sys/class/net | grep -v "lo" | grep -v "docker" | grep -v "veth"
         echo -e "----------------------------------------------------"
         read -p "请输入要绑定的网卡名称 (输入 auto 恢复自动): " INPUT_IF
+        
         if [[ "$INPUT_IF" == "auto" ]] || [[ -z "$INPUT_IF" ]]; then
             rm -f "$PREF_FILE"
             echo -e "\033[32m已恢复为自动检测模式。\033[0m"
@@ -88,7 +93,8 @@ update_subscription() {
 
     echo "正在合并配置..."
     
-    # === JQ 逻辑：强制开启自动接口检测，防止代理死循环 ===
+    # === JQ 逻辑更新：防环路增强版 ===
+    # 核心修改：给所有非逻辑节点（直连、代理等）绑定网卡
     jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" --arg iface "$MANUAL_IF" '
        (if ($remote[0] | type) == "array" then $remote[0] else $remote[0].outbounds end) as $raw_nodes |
        ($raw_nodes | map(select(.type != "selector" and .type != "urltest" and .type != "direct" and .type != "block" and .type != "dns"))) as $nodes |
@@ -117,18 +123,18 @@ update_subscription() {
            else . end
        )) as $processed_groups |
 
-       # 2. 网卡绑定：只给“Direct”出站绑定网卡
+       # 2. 网卡绑定 (Fix Loop): 
+       # 只要不是 selector/urltest/dns/block，并且设定了网卡，就全部强制绑定！
        ($processed_groups + $nodes | map(
-           if .type == "direct" and $iface != "" then 
+           if (.type != "selector" and .type != "urltest" and .type != "block" and .type != "dns") and $iface != "" then 
                . + {bind_interface: $iface} 
            else . end
        )) as $final_outbounds |
 
-       # 3. 彻底清洗 DNS：删除 auto_detect_interface 字段
+       # 3. 彻底清洗 DNS
        ($tpl[0].dns | del(.auto_detect_interface)) as $clean_dns |
 
-       # 4. 路由配置：强制开启 auto_detect_interface = true
-       # 这样即使 Direct 绑定了 eth0，代理流量也能自动找到出口，不会死循环
+       # 4. 路由配置：依然保持自动检测开启作为双重保险
        ($tpl[0].route + {auto_detect_interface: true}) as $final_route |
 
        {
