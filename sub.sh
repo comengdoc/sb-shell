@@ -2,7 +2,7 @@
 WORKDIR="/etc/sbshell"
 CONFIG_FILE="/etc/sing-box/config.json"
 TEMPLATE_DIR="$WORKDIR/templates"
-PREF_FILE="$WORKDIR/.interface_pref"  # 新增：网卡配置记忆文件
+PREF_FILE="$WORKDIR/.interface_pref"
 
 check_jq() {
     if ! command -v jq &> /dev/null; then
@@ -15,26 +15,21 @@ urlencode() {
     echo -n "$1" | jq -sRr @uri
 }
 
-# === 新增功能：网卡选择交互 ===
 select_interface() {
     CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
-    
     echo -e "----------------------------------------------------"
     if [ -n "$CURRENT_PREF" ]; then
         echo -e "当前网络出口设定: \033[32m手动指定 ($CURRENT_PREF)\033[0m"
     else
         echo -e "当前网络出口设定: \033[32m自动智能检测 (默认)\033[0m"
     fi
-    
-    echo -e "在多网口/Docker环境下，自动检测可能会失效。"
+    echo -e "注意: 手动指定仅影响'直连'流量，代理流量将自动路由。"
     read -p "是否需要更改网卡设定? [y/N]: " CHANGE_IF
-    
     if [[ "$CHANGE_IF" == "y" ]] || [[ "$CHANGE_IF" == "Y" ]]; then
         echo -e "\n系统可用物理网卡:"
         ls /sys/class/net | grep -v "lo" | grep -v "docker" | grep -v "veth"
         echo -e "----------------------------------------------------"
         read -p "请输入要绑定的网卡名称 (输入 auto 恢复自动): " INPUT_IF
-        
         if [[ "$INPUT_IF" == "auto" ]] || [[ -z "$INPUT_IF" ]]; then
             rm -f "$PREF_FILE"
             echo -e "\033[32m已恢复为自动检测模式。\033[0m"
@@ -53,24 +48,17 @@ select_interface() {
 update_subscription() {
     check_jq
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
-    if [[ "$MODE" == "TUN" ]]; then
-        LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json"
-    else
-        LOCAL_TEMPLATE="$TEMPLATE_DIR/tproxy.json"
-    fi
+    [[ "$MODE" == "TUN" ]] && LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json" || LOCAL_TEMPLATE="$TEMPLATE_DIR/tproxy.json"
     
     if [[ ! -f "$LOCAL_TEMPLATE" ]]; then
         echo -e "\033[31m错误: 找不到模板文件 $LOCAL_TEMPLATE\033[0m"
         return
     fi
 
-    # 调用网卡选择逻辑
     select_interface
 
     PREV_BACKEND=""
     [ -f "$WORKDIR/.backend_url" ] && PREV_BACKEND=$(cat "$WORKDIR/.backend_url")
-    echo "请输入转换后端地址 (如 https://singbox.xxx.xyz)"
-    echo "注意: 必须是适配 Sing-box-subscribe 的后端"
     read -p "后端地址 [默认: ${PREV_BACKEND:-无}]: " BACKEND_INPUT
     [ -n "$BACKEND_INPUT" ] && BACKEND_URL="$BACKEND_INPUT" || BACKEND_URL="$PREV_BACKEND"
     BACKEND_URL=${BACKEND_URL%/}
@@ -90,31 +78,22 @@ update_subscription() {
         TARGET_URL="${BACKEND_URL}/config/${ENCODED_SUB}"
     fi
 
-    echo -e "请求地址: ${TARGET_URL}"
     echo "正在下载节点..."
     curl -L -k -o "$DOWNLOAD_TEMP" --connect-timeout 15 --max-time 30 "$TARGET_URL"
     
-    if [[ $? -ne 0 ]] || [[ ! -s "$DOWNLOAD_TEMP" ]]; then
-        echo -e "\033[31m下载失败，请检查网络或后端地址\033[0m"
-        rm -f "$DOWNLOAD_TEMP"; return
-    fi
-    
     if ! jq -e . "$DOWNLOAD_TEMP" >/dev/null 2>&1; then
-        echo -e "\033[31m下载内容不是有效的 JSON！\033[0m"
-        echo "后端返回内容预览:"
-        head -n 5 "$DOWNLOAD_TEMP"
+        echo -e "\033[31m下载失败或内容非JSON！\033[0m"
         rm -f "$DOWNLOAD_TEMP"; return
     fi
 
-    echo "正在合并配置 (本地正则筛选 + 网卡绑定)..."
+    echo "正在合并配置..."
     
-    # === JQ 逻辑更新：修复注入位置错误 ===
-    # 错误修复：auto_detect_interface 必须注入到 route 中，而不是 dns 中
+    # === JQ 逻辑：强制开启自动接口检测，防止代理死循环 ===
     jq -n --slurpfile tpl "$LOCAL_TEMPLATE" --slurpfile remote "$DOWNLOAD_TEMP" --arg iface "$MANUAL_IF" '
        (if ($remote[0] | type) == "array" then $remote[0] else $remote[0].outbounds end) as $raw_nodes |
        ($raw_nodes | map(select(.type != "selector" and .type != "urltest" and .type != "direct" and .type != "block" and .type != "dns"))) as $nodes |
        
-       # 1. 处理分组筛选
+       # 1. 筛选逻辑
        ($tpl[0].outbounds | map(
            if .type == "selector" or .type == "urltest" then
                if .filter then
@@ -133,28 +112,28 @@ update_subscription() {
                        tag: $group.tag,
                        type: $group.type,
                        outbounds: (if ($matches | length) > 0 then ($matches | map(.tag)) else ["➡️ 直连"] end)
-                   } 
-                   + (if $group.interval then {interval: $group.interval} else {} end)
-                   + (if $group.tolerance then {tolerance: $group.tolerance} else {} end)
-                   + (if $group.strategy then {strategy: $group.strategy} else {} end)
+                   } + ($group | del(.outbounds, .filter))
                else . end
            else . end
        )) as $processed_groups |
 
-       # 2. 网卡绑定：如果指定了网卡，给所有 Direct 出口绑定网卡
+       # 2. 网卡绑定：只给“Direct”出站绑定网卡
        ($processed_groups + $nodes | map(
            if .type == "direct" and $iface != "" then 
                . + {bind_interface: $iface} 
            else . end
        )) as $final_outbounds |
 
-       # 3. 关键修复：如果指定了网卡，将 route 中的 auto_detect_interface 设为 false
-       # 注意：这里操作的是 route 对象，而不是 dns 对象
-       ($tpl[0].route | if $iface != "" then . + {auto_detect_interface: false} else . end) as $final_route |
+       # 3. 彻底清洗 DNS：删除 auto_detect_interface 字段
+       ($tpl[0].dns | del(.auto_detect_interface)) as $clean_dns |
+
+       # 4. 路由配置：强制开启 auto_detect_interface = true
+       # 这样即使 Direct 绑定了 eth0，代理流量也能自动找到出口，不会死循环
+       ($tpl[0].route + {auto_detect_interface: true}) as $final_route |
 
        {
            log: $tpl[0].log, 
-           dns: $tpl[0].dns, 
+           dns: $clean_dns, 
            inbounds: $tpl[0].inbounds, 
            route: $final_route, 
            experimental: $tpl[0].experimental, 
