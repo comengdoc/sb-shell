@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box 核心函数库 (权限修复增强版)
+#  Sing-box 核心函数库 (含版本选择功能)
 # ==========================================
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
@@ -51,7 +51,7 @@ check_status() {
     echo -e "开机自启: ${AUTOSTART}  |  工作模式: ${MODE_DISPLAY}"
 }
 
-# --- 安装 Sing-box (修复权限问题) ---
+# --- 安装 Sing-box (新增版本选择功能) ---
 install_singbox() {
     echo -e "${GREEN}开始安装依赖...${PLAIN}"
     if command -v apt-get >/dev/null; then
@@ -67,30 +67,73 @@ install_singbox() {
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
 
-    echo -e "${GREEN}正在获取最新正式版...${PLAIN}"
-    TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    if [[ -z "$TAG" ]]; then
-        TAG=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+")
+    echo -e "-----------------------------------------------"
+    echo -e "${GREEN}请选择安装版本:${PLAIN}"
+    echo -e "1. 自动获取最新正式版 (Latest)"
+    echo -e "2. 手动指定版本 (例如 1.9.7, 1.10.1)"
+    echo -e "-----------------------------------------------"
+    read -p "请输入选项 [默认1]: " VER_OPT
+
+    if [[ "$VER_OPT" == "2" ]]; then
+        read -p "请输入版本号 (无需带v，例如 1.8.0): " INPUT_VER
+        if [[ -z "$INPUT_VER" ]]; then
+            echo -e "${RED}版本号不能为空，已取消安装。${PLAIN}"
+            return
+        fi
+        # 处理 v 前缀，确保 TAG 和 VERSION 变量正确
+        if [[ "$INPUT_VER" == v* ]]; then
+            TAG="$INPUT_VER"
+            VERSION="${INPUT_VER#v}"
+        else
+            TAG="v$INPUT_VER"
+            VERSION="$INPUT_VER"
+        fi
+        echo -e "${GREEN}已选定版本: ${TAG}${PLAIN}"
+    else
+        echo -e "${GREEN}正在获取最新正式版...${PLAIN}"
+        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        
+        # API 获取失败时的备选方案
+        if [[ -z "$TAG" ]]; then
+            TAG=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+")
+        fi
+
+        # 实在获取不到时的最后兜底
+        if [[ -z "$TAG" ]]; then
+            echo -e "${RED}无法自动获取最新版本号，请检查网络。${PLAIN}"
+            read -p "请手动输入版本号 (如 1.11.4): " MANUAL_VER
+            [[ -z "$MANUAL_VER" ]] && return
+            [[ "$MANUAL_VER" != v* ]] && TAG="v$MANUAL_VER" || TAG="$MANUAL_VER"
+        fi
+        VERSION=${TAG#v}
     fi
 
-    if [[ -z "$TAG" ]]; then
-        read -p "无法自动获取，请输入版本号 (如 1.11.4): " MANUAL_VER
-        [[ -z "$MANUAL_VER" ]] && return
-        [[ "$MANUAL_VER" != v* ]] && TAG="v$MANUAL_VER" || TAG="$MANUAL_VER"
-    fi
-
-    VERSION=${TAG#v}
+    # 构建下载链接
     URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VERSION}-${DOWNLOAD_ARCH}.tar.gz"
     
     echo -e "正在下载: $URL"
     wget -T 30 -t 3 -O /tmp/sing-box.tar.gz "$URL"
     if [[ $? -ne 0 ]]; then
-        echo -e "${RED}下载失败。${PLAIN}"
+        echo -e "${RED}下载失败！请检查版本号是否存在或网络连接。${PLAIN}"
         return
     fi
     
     tar -zxvf /tmp/sing-box.tar.gz -C /tmp/ >/dev/null 2>&1
-    mv /tmp/sing-box*${DOWNLOAD_ARCH}/sing-box "$SINGBOX_BIN"
+    
+    # 查找解压后的二进制文件 (防止目录名不一致)
+    EXTRACTED_DIR=$(find /tmp -type d -name "sing-box*${DOWNLOAD_ARCH}" | head -n 1)
+    if [[ -f "$EXTRACTED_DIR/sing-box" ]]; then
+        mv "$EXTRACTED_DIR/sing-box" "$SINGBOX_BIN"
+    else
+        # 备用方案：如果在子目录找不到，可能在根目录（虽然官方包通常在子目录）
+        if [[ -f "/tmp/sing-box" ]]; then
+             mv "/tmp/sing-box" "$SINGBOX_BIN"
+        else
+             echo -e "${RED}解压异常，未找到二进制文件。${PLAIN}"
+             return
+        fi
+    fi
+
     chmod +x "$SINGBOX_BIN"
     rm -rf /tmp/sing-box*
 
@@ -121,6 +164,7 @@ SYSTEMD
     systemctl daemon-reload
     systemctl enable sing-box
     echo -e "${GREEN}Sing-box 安装完成！版本: $VERSION${PLAIN}"
+    echo -e "${YELLOW}注意: 如果进行了版本降级，请检查 config.json 是否兼容旧版本。${PLAIN}"
 }
 
 start_service() {
