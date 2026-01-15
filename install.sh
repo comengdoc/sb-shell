@@ -22,11 +22,11 @@ echo -e "${GREEN}正在开始在线安装 sbshell...${PLAIN}"
 # 1. 安装基础下载工具 (防止纯净系统没有 curl/wget)
 echo -e "${YELLOW}检查并安装基础依赖...${PLAIN}"
 if command -v apt-get >/dev/null; then
-    apt-get update -y && apt-get install -y curl wget tar
+    apt-get update -y && apt-get install -y curl wget tar jq
 elif command -v yum >/dev/null; then
-    yum install -y curl wget tar
+    yum install -y curl wget tar jq
 elif command -v apk >/dev/null; then
-    apk add curl wget tar
+    apk add curl wget tar jq
 fi
 
 # 2. 创建目录结构

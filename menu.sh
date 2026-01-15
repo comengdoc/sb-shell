@@ -69,7 +69,7 @@ menu() {
     echo -e "-------------------------------------------------------------"
     echo -e "${YELLOW}6.${PLAIN} 切换模式 (TUN/TProxy)"
     echo -e "${YELLOW}7.${PLAIN} 更新订阅 (已集成正则筛选+后端转换)"
-    echo -e "${YELLOW}8.${PLAIN} 编辑当前配置"
+    echo -e "${YELLOW}8.${PLAIN} 编辑规则模板 (永久生效)"
     echo -e "-------------------------------------------------------------"
     echo -e "${CYAN}s.${PLAIN} 开启防断联保护"
     echo -e "${CYAN}c.${PLAIN} 取消防断联"
@@ -86,7 +86,20 @@ menu() {
         5) show_log ;;
         6) switch_mode ;;
         7) update_subscription ;;
-        8) vim /etc/sing-box/config.json && restart_service ;;
+        8) 
+           MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
+           if [[ "$MODE" == "TUN" ]]; then
+               vim /etc/sbshell/templates/tun.json
+           else
+               vim /etc/sbshell/templates/tproxy.json
+           fi
+           # 提示用户需要重新生成配置
+           echo -e "${YELLOW}提示：模板已修改。请运行 [7. 更新订阅] 以重新生成配置文件。${PLAIN}"
+           read -p "是否现在立即更新并应用? [y/N]: " REGEN
+           if [[ "$REGEN" =~ ^[yY]$ ]]; then
+               update_subscription
+           fi
+           ;;
         s|S) start_safety_timer ;;
         c|C) stop_safety_timer ;;
         9) uninstall_all ;;
