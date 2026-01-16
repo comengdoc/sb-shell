@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  安装 Sing-box (reF1nd 社区版 / 专家优化)
+#  安装 Sing-box (PuerNya 独家优化版)
 # ==========================================
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
@@ -28,12 +28,8 @@ check_status() {
 
     if [ -f "$SINGBOX_BIN" ]; then
         VER_NUM=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
-        if [ -f "$WORKDIR/.version_tag" ]; then
-            TAG=$(cat "$WORKDIR/.version_tag")
-            VER="${VER_NUM} (${TAG})"
-        else
-            VER="${VER_NUM}"
-        fi
+        # 强制标记为 PuerNya
+        VER="${VER_NUM} (PuerNya)"
     else
         VER="${RED}未安装${PLAIN}"
     fi
@@ -43,55 +39,65 @@ check_status() {
 }
 
 install_singbox() {
-    echo -e "${GREEN}开始安装依赖...${PLAIN}"
+    echo -e "${GREEN}正在准备安装 PuerNya 核心...${PLAIN}"
+    
+    # 1. 安装依赖
     if command -v apt-get >/dev/null; then
-        apt-get update && apt-get install -y curl wget unzip tar nftables git jq
+        apt-get update && apt-get install -y curl wget tar nftables git jq
     elif command -v apk >/dev/null; then
-        apk add curl wget unzip tar nftables git jq
+        apk add curl wget tar nftables git jq
     fi
     
+    # 2. 架构判断 (PuerNya 命名规则适配)
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|armv8) DOWNLOAD_ARCH="linux-armv8" ;;
-        x86_64|amd64)  DOWNLOAD_ARCH="linux-amd64" ;;
-        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
+        aarch64|armv8) 
+            ARCH_CODE="linux-arm64" 
+            ;;
+        x86_64|amd64)  
+            ARCH_CODE="linux-amd64" 
+            ;;
+        *) 
+            echo -e "${RED}不支持的架构: $ARCH${PLAIN}"
+            return 
+            ;;
     esac
 
-    echo -e "-----------------------------------------------"
-    echo -e "${GREEN}请选择 reF1nd 安装版本:${PLAIN}"
-    echo -e "1. Latest Main (稳定推荐 - 兼容性佳)"
-    echo -e "2. Latest Dev  (激进更新 - 新特性)"
-    echo -e "-----------------------------------------------"
-    read -p "请输入选项 [默认1]: " VER_OPT
-
-    BASE_URL="https://github.com/enpioodada/sing-box-core/releases/download/sing-box"
-
-    if [[ "$VER_OPT" == "2" ]]; then
-        URL="${BASE_URL}/sing-box-ref1nd-dev-${DOWNLOAD_ARCH}.tar.gz"
-        VERSION_TYPE="reF1nd-Dev"
+    echo -e "${YELLOW}正在获取 PuerNya 最新版本信息...${PLAIN}"
+    
+    # 获取最新 Tag
+    LATEST_TAG=$(curl -sL --retry 3 "https://api.github.com/repos/PuerNya/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    if [[ -z "$LATEST_TAG" ]]; then
+        echo -e "${RED}获取版本失败，尝试使用硬编码备用版本 (v1.10.7)${PLAIN}"
+        LATEST_TAG="v1.10.7"
     else
-        URL="${BASE_URL}/sing-box-ref1nd-main-${DOWNLOAD_ARCH}.tar.gz"
-        VERSION_TYPE="reF1nd-Main"
+        echo -e "${GREEN}检测到最新版本: ${LATEST_TAG}${PLAIN}"
     fi
-    
-    echo -e "正在下载: $URL"
+
+    # 构造下载链接 (PuerNya 标准命名: sing-box-linux-amd64.tar.gz)
+    DOWNLOAD_URL="https://github.com/PuerNya/sing-box/releases/download/${LATEST_TAG}/sing-box-${ARCH_CODE}.tar.gz"
+
+    echo -e "正在下载: $DOWNLOAD_URL"
     TMP_DIR=$(mktemp -d)
-    wget -T 30 -t 3 -O "$TMP_DIR/sing-box.tar.gz" "$URL"
     
-    if [[ $? -ne 0 ]]; then
-        echo -e "${RED}下载失败！${PLAIN}"
+    if ! wget -T 60 -t 3 -O "$TMP_DIR/sb.tar.gz" "$DOWNLOAD_URL"; then
+        echo -e "${RED}下载失败！请检查网络或 Github 连接。${PLAIN}"
         rm -rf "$TMP_DIR"
         return
     fi
     
-    tar -zxvf "$TMP_DIR/sing-box.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
+    echo "解压中..."
+    tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
+    
+    # 查找二进制文件 (排除解压出的文件夹结构影响)
     BINARY_FOUND=$(find "$TMP_DIR" -type f -name "sing-box" | head -n 1)
 
     if [[ -n "$BINARY_FOUND" ]]; then
         systemctl stop sing-box 2>/dev/null
         mv -f "$BINARY_FOUND" "$SINGBOX_BIN"
         chmod +x "$SINGBOX_BIN"
-        echo -e "${GREEN}核心安装成功${PLAIN}"
+        echo -e "${GREEN}PuerNya 核心安装成功${PLAIN}"
     else
         echo -e "${RED}解压失败：未找到二进制文件${PLAIN}"
         rm -rf "$TMP_DIR"
@@ -99,11 +105,15 @@ install_singbox() {
     fi
 
     rm -rf "$TMP_DIR"
-    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR"
     
-    # 写入版本标记，供 sub.sh 识别
-    echo "$VERSION_TYPE" > "$WORKDIR/.version_tag"
+    # 创建必要目录
+    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR"
+    mkdir -p "$WORKDIR/providers" # 确保 provider 目录存在
 
+    # 写入版本标记
+    echo "PuerNya" > "$WORKDIR/.version_tag"
+
+    # 写入 Systemd 服务
     cat > $SERVICE_FILE <<SYSTEMD
 [Unit]
 Description=sing-box service
@@ -127,15 +137,15 @@ SYSTEMD
 
     systemctl daemon-reload
     systemctl enable sing-box
-    echo -e "${GREEN}安装完成!${PLAIN}"
+    echo -e "${GREEN}安装完成! 请运行菜单中的 [7. 更新订阅] 初始化配置。${PLAIN}"
 }
 
 start_service() {
-    # 开启 IP 转发
+    # 开启转发
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
     
-    # NAT 规则 (关键)
+    # NAT
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     if [ -n "$DEFAULT_IF" ]; then
         iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE
@@ -154,7 +164,6 @@ start_service() {
 
 stop_service() {
     systemctl stop sing-box
-    # 清理 NAT
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     [ -n "$DEFAULT_IF" ] && iptables -t nat -D POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null
     nft flush ruleset 2>/dev/null
