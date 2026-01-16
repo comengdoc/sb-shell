@@ -28,7 +28,18 @@ check_status() {
     fi
 
     if [ -f "$SINGBOX_BIN" ]; then
-        VER=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
+        # 获取纯数字版本号
+        VER_NUM=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
+        
+        # === 新增逻辑：读取安装时保存的版本标记 ===
+        if [ -f "$WORKDIR/.version_tag" ]; then
+            TAG=$(cat "$WORKDIR/.version_tag")
+            VER="${VER_NUM} (${TAG})"
+        else
+            VER="${VER_NUM}"
+        fi
+        # ==========================================
+
         [ -z "$VER" ] && VER="未知"
     else
         VER="${RED}未安装${PLAIN}"
@@ -62,7 +73,7 @@ install_singbox() {
     
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|arm64) DOWNLOAD_ARCH="linux-arm64" ;;
+        aarch64|armv8) DOWNLOAD_ARCH="linux-armv8" ;;
         x86_64|amd64)  DOWNLOAD_ARCH="linux-amd64" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
@@ -121,6 +132,12 @@ install_singbox() {
     rm -rf "$TMP_DIR"
     mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR"
 
+    # === 新增逻辑：保存安装的版本类型标记 ===
+    # 确保 WORKDIR 存在 (TEMPLATE_DIR 的父目录)
+    if [ ! -d "$WORKDIR" ]; then mkdir -p "$WORKDIR"; fi
+    echo "$VERSION_TYPE" > "$WORKDIR/.version_tag"
+    # =======================================
+
     # 生成 Systemd 文件 (保持原样)
     cat > $SERVICE_FILE <<SYSTEMD
 [Unit]
@@ -149,7 +166,7 @@ SYSTEMD
     # 获取实际安装的版本号显示
     INSTALLED_VER=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version .*' | head -1)
     echo -e "${GREEN}Sing-box 安装完成！${PLAIN}"
-    echo -e "当前版本: ${CYAN}$INSTALLED_VER${PLAIN}"
+    echo -e "当前版本: ${CYAN}$INSTALLED_VER ($VERSION_TYPE)${PLAIN}"
 }
 
 start_service() {
