@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  安装 Sing-box (PuerNya 独家优化版)
+#  安装 Sing-box (针对用户模板 7891 端口优化)
 # ==========================================
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
@@ -28,8 +28,7 @@ check_status() {
 
     if [ -f "$SINGBOX_BIN" ]; then
         VER_NUM=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
-        # 强制标记为 PuerNya
-        VER="${VER_NUM} (PuerNya)"
+        VER="${VER_NUM} (Official)"
     else
         VER="${RED}未安装${PLAIN}"
     fi
@@ -39,81 +38,57 @@ check_status() {
 }
 
 install_singbox() {
-    echo -e "${GREEN}正在准备安装 PuerNya 核心...${PLAIN}"
+    echo -e "${GREEN}正在准备安装 Sing-box 官方核心...${PLAIN}"
     
-    # 1. 安装依赖
     if command -v apt-get >/dev/null; then
         apt-get update && apt-get install -y curl wget tar nftables git jq
     elif command -v apk >/dev/null; then
         apk add curl wget tar nftables git jq
+    elif command -v yum >/dev/null; then
+        yum install -y curl wget tar nftables git jq
     fi
     
-    # 2. 架构判断 (PuerNya 命名规则适配)
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|armv8) 
-            ARCH_CODE="linux-arm64" 
-            ;;
-        x86_64|amd64)  
-            ARCH_CODE="linux-amd64" 
-            ;;
-        *) 
-            echo -e "${RED}不支持的架构: $ARCH${PLAIN}"
-            return 
-            ;;
+        aarch64|armv8) ARCH_CODE="linux-arm64" ;;
+        x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
+        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
 
-    echo -e "${YELLOW}正在获取 PuerNya 最新版本信息...${PLAIN}"
+    echo -e "${YELLOW}正在获取最新版本...${PLAIN}"
+    LATEST_TAG=$(curl -sL --retry 3 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    [[ -z "$LATEST_TAG" ]] && echo -e "${RED}获取版本失败${PLAIN}" && return
     
-    # 获取最新 Tag
-    LATEST_TAG=$(curl -sL --retry 3 "https://api.github.com/repos/PuerNya/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    
-    if [[ -z "$LATEST_TAG" ]]; then
-        echo -e "${RED}获取版本失败，尝试使用硬编码备用版本 (v1.10.7)${PLAIN}"
-        LATEST_TAG="v1.10.7"
-    else
-        echo -e "${GREEN}检测到最新版本: ${LATEST_TAG}${PLAIN}"
-    fi
-
-    # 构造下载链接 (PuerNya 标准命名: sing-box-linux-amd64.tar.gz)
-    DOWNLOAD_URL="https://github.com/PuerNya/sing-box/releases/download/${LATEST_TAG}/sing-box-${ARCH_CODE}.tar.gz"
+    VERSION_NO_V=${LATEST_TAG#v}
+    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/sing-box-${VERSION_NO_V}-${ARCH_CODE}.tar.gz"
 
     echo -e "正在下载: $DOWNLOAD_URL"
     TMP_DIR=$(mktemp -d)
+    wget -T 60 -t 3 -O "$TMP_DIR/sb.tar.gz" "$DOWNLOAD_URL" || { echo -e "${RED}下载失败${PLAIN}"; rm -rf "$TMP_DIR"; return; }
     
-    if ! wget -T 60 -t 3 -O "$TMP_DIR/sb.tar.gz" "$DOWNLOAD_URL"; then
-        echo -e "${RED}下载失败！请检查网络或 Github 连接。${PLAIN}"
-        rm -rf "$TMP_DIR"
-        return
-    fi
-    
-    echo "解压中..."
     tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
-    
-    # 查找二进制文件 (排除解压出的文件夹结构影响)
     BINARY_FOUND=$(find "$TMP_DIR" -type f -name "sing-box" | head -n 1)
 
     if [[ -n "$BINARY_FOUND" ]]; then
         systemctl stop sing-box 2>/dev/null
         mv -f "$BINARY_FOUND" "$SINGBOX_BIN"
         chmod +x "$SINGBOX_BIN"
-        echo -e "${GREEN}PuerNya 核心安装成功${PLAIN}"
+        echo -e "${GREEN}安装成功${PLAIN}"
     else
-        echo -e "${RED}解压失败：未找到二进制文件${PLAIN}"
-        rm -rf "$TMP_DIR"
-        return
+        echo -e "${RED}未找到二进制文件${PLAIN}"; rm -rf "$TMP_DIR"; return
     fi
-
     rm -rf "$TMP_DIR"
     
-    # 创建必要目录
-    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR"
-    mkdir -p "$WORKDIR/providers" # 确保 provider 目录存在
+    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR" "$WORKDIR/providers" "$WORKDIR/ui"
+    echo "Official" > "$WORKDIR/.version_tag"
 
-    # 写入版本标记
-    echo "PuerNya" > "$WORKDIR/.version_tag"
+    # 下载 Dashboard UI (Yacd/Metacubex)
+    echo -e "${YELLOW}正在安装 Dashboard UI...${PLAIN}"
+    curl -sL -o "$WORKDIR/ui.zip" "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
+    unzip -o -q "$WORKDIR/ui.zip" -d "$WORKDIR/"
+    mv "$WORKDIR/Yacd-meta-gh-pages"/* "$WORKDIR/ui/" 2>/dev/null
+    rm -rf "$WORKDIR/ui.zip" "$WORKDIR/Yacd-meta-gh-pages"
 
-    # 写入 Systemd 服务
     cat > $SERVICE_FILE <<SYSTEMD
 [Unit]
 Description=sing-box service
@@ -137,15 +112,13 @@ SYSTEMD
 
     systemctl daemon-reload
     systemctl enable sing-box
-    echo -e "${GREEN}安装完成! 请运行菜单中的 [7. 更新订阅] 初始化配置。${PLAIN}"
+    echo -e "${GREEN}安装完成!${PLAIN}"
 }
 
 start_service() {
-    # 开启转发
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
     
-    # NAT
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     if [ -n "$DEFAULT_IF" ]; then
         iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE
@@ -155,17 +128,17 @@ start_service() {
     if [[ "$MODE" == "TPROXY" ]]; then configure_nftables_tproxy; fi
     
     systemctl restart sing-box
+    sleep 1
     if systemctl is-active --quiet sing-box; then 
         echo -e "${GREEN}服务已启动 ($MODE模式)${PLAIN}"
     else 
-        echo -e "${RED}启动失败，请检查日志 (选项5)${PLAIN}"
+        echo -e "${RED}启动失败，请运行 [5] 查看日志${PLAIN}"
+        echo -e "${YELLOW}常见原因: 模板中的 'outbounds' 为空，请先运行 [7] 更新订阅。${PLAIN}"
     fi
 }
 
 stop_service() {
     systemctl stop sing-box
-    DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
-    [ -n "$DEFAULT_IF" ] && iptables -t nat -D POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null
     nft flush ruleset 2>/dev/null
     echo -e "${GREEN}服务已停止${PLAIN}"
 }
@@ -174,20 +147,21 @@ restart_service() { start_service; }
 show_log() { journalctl -u sing-box -f -n 50; }
 
 switch_mode() {
-    echo -e "1. TUN (推荐)  2. TProxy"
+    echo -e "1. TUN  2. TProxy"
     read -p "选择: " choice
     [[ "$choice" == "1" ]] && echo "TUN" > "$WORKDIR/.mode" && echo "已切换为 TUN"
     [[ "$choice" == "2" ]] && echo "TPROXY" > "$WORKDIR/.mode" && echo "已切换为 TProxy"
 }
 
 configure_nftables_tproxy() {
+    # 修正：此处端口必须对应模板中的 tproxy-in (7891)
     nft flush ruleset
     nft -f - <<NFT
 table ip singbox {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
         ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255, 192.168.0.0/16, 10.0.0.0/8 } return
-        meta l4proto { tcp, udp } meta mark set 1 tproxy to :7895 accept
+        meta l4proto { tcp, udp } meta mark set 1 tproxy to :7891 accept
     }
     chain output {
         type route hook output priority mangle; policy accept;
