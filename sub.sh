@@ -3,160 +3,142 @@ WORKDIR="/etc/sbshell"
 CONFIG_FILE="/etc/sing-box/config.json"
 TEMPLATE_DIR="$WORKDIR/templates"
 PREF_FILE="$WORKDIR/.interface_pref"
+VERSION_TAG_FILE="$WORKDIR/.version_tag"
 
-# === 依赖检查 ===
+# 依赖检查
 check_jq() {
     if ! command -v jq &> /dev/null; then
         echo "正在安装 jq..."
-        if command -v apt-get >/dev/null; then
-            apt-get update -y && apt-get install -y jq
-        else
-            apk add jq
-        fi
+        if command -v apt-get >/dev/null; then apt-get update -y && apt-get install -y jq; else apk add jq; fi
     fi
 }
 
+# URL 编码函数 (用于后端转换)
 urlencode() {
-    echo -n "$1" | jq -sRr @uri
+    local length="${#1}"
+    for (( i = 0; i < length; i++ )); do
+        local c="${1:i:1}"
+        case $c in
+            [a-zA-Z0-9.~_-]) printf "$c" ;;
+            *) printf '%%%02X' "'$c" ;;
+        esac
+    done
 }
 
-# === 网卡选择交互 (保持您原有的逻辑) ===
-select_interface() {
-    CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
-    echo -e "----------------------------------------------------"
-    if [ -n "$CURRENT_PREF" ]; then
-        echo -e "当前网络出口: \033[32m手动指定 ($CURRENT_PREF)\033[0m"
-    else
-        echo -e "当前网络出口: \033[32m自动智能检测\033[0m"
-    fi
-    read -p "是否更改网卡设定? [y/N]: " CHANGE_IF
-    if [[ "$CHANGE_IF" =~ ^[yY]$ ]]; then
-        ls /sys/class/net | grep -vE "lo|docker|veth"
-        read -p "输入网卡名称 (输入 auto 恢复自动): " INPUT_IF
-        if [[ "$INPUT_IF" == "auto" ]] || [[ -z "$INPUT_IF" ]]; then
-            rm -f "$PREF_FILE"
-            MANUAL_IF=""
-        else
-            echo "$INPUT_IF" > "$PREF_FILE"
-            MANUAL_IF="$INPUT_IF"
-        fi
-    else
-        MANUAL_IF="$CURRENT_PREF"
-    fi
-}
-
-# === 核心订阅更新函数 (适配 reF1nd + 保留用户模板) ===
+# 核心订阅更新
 update_subscription() {
     check_jq
     
-    # 1. 确定模板文件
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
-    # 如果是 TUN 模式，强制使用用户提供的 tun.json
-    if [[ "$MODE" == "TUN" ]]; then
-        LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json"
-    else
-        LOCAL_TEMPLATE="$TEMPLATE_DIR/tproxy.json"
-    fi
+    [[ "$MODE" == "TUN" ]] && LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json" || LOCAL_TEMPLATE="$TEMPLATE_DIR/tproxy.json"
     
     if [[ ! -f "$LOCAL_TEMPLATE" ]]; then
-        echo -e "\033[31m错误: 找不到模板文件 $LOCAL_TEMPLATE\033[0m"
-        echo "请确保您已将原来的 json 保存为该文件。"
-        return
+        echo -e "\033[31m错误: 找不到模板 $LOCAL_TEMPLATE\033[0m"; return
     fi
 
-    select_interface
+    # 1. 识别核心能力
+    CORE_TAG=$(cat "$VERSION_TAG_FILE" 2>/dev/null)
+    USE_ADVANCED_MODE=false
 
-    # 2. 获取并处理订阅链接
-    PREV_BACKEND=""
-    [ -f "$WORKDIR/.backend_url" ] && PREV_BACKEND=$(cat "$WORKDIR/.backend_url")
-    read -p "后端地址 (reF1nd通常不需要，回车跳过): " BACKEND_INPUT
-    [ -n "$BACKEND_INPUT" ] && BACKEND_URL="$BACKEND_INPUT" || BACKEND_URL="$PREV_BACKEND"
-    # 去除末尾斜杠
-    BACKEND_URL=${BACKEND_URL%/}
-    [ -n "$BACKEND_URL" ] && echo "$BACKEND_URL" > "$WORKDIR/.backend_url"
-
-    read -p "请输入订阅链接 (支持 Clash/Mihomo/Singbox 链接): " SUB_URL
-    if [[ -z "$SUB_URL" ]]; then echo "URL不能为空"; return; fi
-
-    # 如果有后端，进行转换；否则直接使用
-    if [[ -n "$BACKEND_URL" ]]; then
-        echo "正在构建转换链接..."
-        ENCODED_SUB=$(urlencode "$SUB_URL")
-        # 即使是 reF1nd，如果订阅很乱，依然建议转成 Clash 格式
-        FINAL_URL="${BACKEND_URL}/config/${ENCODED_SUB}&file=https://raw.githubusercontent.com/acl4ssr/acl4ssr/master/Clash/config/ACL4SSR_Online_Full.ini"
+    # 逻辑：reF1nd (v1.9+) 和 Puer 都支持 outbound_providers。
+    # 只有旧版官方或明确不支持的版本才降级。
+    if [[ "$CORE_TAG" =~ "reF1nd" ]] || [[ "$CORE_TAG" =~ "Puer" ]] || [[ "$CORE_TAG" =~ "Dev" ]]; then
+        USE_ADVANCED_MODE=true
+        echo -e "\033[32m检测到高性能核心 ($CORE_TAG)：已启用 Provider 订阅模式。\033[0m"
     else
-        FINAL_URL="$SUB_URL"
+        # 兜底逻辑：虽然新版官方也支持，但为了保险起见，如果是非 reF1nd/Puer，我们假设用户可能用的是旧版
+        # 如果你确认你用的官方版也是 v1.10+，可以强制改这里，但对 reF1nd 用户来说，上面的 if 已经够了。
+        USE_ADVANCED_MODE=false 
+        echo -e "\033[33m检测到普通核心 ($CORE_TAG)：启用兼容模式 (无动态 Provider)。\033[0m"
     fi
 
-    echo "正在根据模板生成 reF1nd 配置文件..."
-
-    # === JQ 魔法：融合模板与 Providers ===
-    # 逻辑说明：
-    # 1. 在根目录插入 providers 字段。
-    # 2. 遍历 outbounds：
-    #    - 凡是带有 "filter" 字段的对象 (说明它是靠关键词筛选节点的)，
-    #      自动给它添加 "providers": ["my_subscription"]。
-    #    - 其他对象保持不变。
-    # 3. 如果指定了网卡，给 direct 出站绑定网卡。
-
-    jq --arg url "$FINAL_URL" \
-       --arg iface "$MANUAL_IF" '
-       # 1. 注入 Providers 定义
-       .providers = {
-         "my_subscription": {
-           "type": "http",
-           "url": $url,
-           "interval": "3600s",
-           "path": "./providers/proxy.yaml",
-           "healthcheck": {
-             "enabled": true,
-             "interval": "600s",
-             "url": "http://www.gstatic.com/generate_204"
-           }
-         }
-       } |
-
-       # 2. 智能注入 Providers 到 Selector/URLTest
-       .outbounds |= map(
-         if .filter then
-            . + { "providers": ["my_subscription"] }
-         else
-            .
-         end
-       ) |
-
-       # 3. 处理网卡绑定 (防回环)
-       .outbounds |= map(
-         if .type == "direct" and $iface != "" then
-            . + { "bind_interface": $iface }
-         else
-            .
-         end
-       )
-
-    ' "$LOCAL_TEMPLATE" > "$CONFIG_FILE"
-
-    if [[ $? -eq 0 ]]; then
-        echo -e "\033[32m配置文件生成成功！\033[0m"
+    # 2. 获取订阅链接与后端处理
+    FINAL_URL=""
+    if [ "$USE_ADVANCED_MODE" = true ]; then
+        PREV_BACKEND=""
+        [ -f "$WORKDIR/.backend_url" ] && PREV_BACKEND=$(cat "$WORKDIR/.backend_url")
         
-        # 验证一下生成的文件是否合法
-        if "$SINGBOX_BIN" check -c "$CONFIG_FILE" >/dev/null 2>&1; then
-            echo "配置校验通过，正在重启服务..."
-            systemctl restart sing-box
-            if systemctl is-active --quiet sing-box; then
-                echo -e "\033[32m服务启动成功！reF1nd 模式运行中。\033[0m"
-                # 提示面板地址 (从模板里读取 external_controller 端口)
-                PORT=$(jq -r '.experimental.clash_api.external_controller // empty' "$CONFIG_FILE" | cut -d: -f2)
-                [[ -n "$PORT" ]] && echo -e "控制面板: http://设备IP:$PORT/ui"
+        echo -e "\033[36m请输入后端转换地址 (例如 https://api.v1.mk)\033[0m"
+        read -p "地址 [回车保持: ${PREV_BACKEND}]: " BACKEND_INPUT
+        [ -n "$BACKEND_INPUT" ] && BACKEND_URL="$BACKEND_INPUT" || BACKEND_URL="$PREV_BACKEND"
+        
+        # 去除末尾斜杠
+        BACKEND_URL=${BACKEND_URL%/}
+        [ -n "$BACKEND_URL" ] && echo "$BACKEND_URL" > "$WORKDIR/.backend_url"
+
+        read -p "请输入机场订阅链接: " SUB_URL
+        
+        if [[ -n "$SUB_URL" ]]; then
+            if [[ -n "$BACKEND_URL" ]]; then
+                echo "正在通过后端转换链接..."
+                ENCODED_SUB=$(urlencode "$SUB_URL")
+                # 构造标准 Sing-box 订阅链接
+                FINAL_URL="${BACKEND_URL}/config/${ENCODED_SUB}&file=https://raw.githubusercontent.com/acl4ssr/acl4ssr/master/Clash/config/ACL4SSR_Online_Full.ini"
             else
-                echo -e "\033[31m服务启动失败，请查看日志。\033[0m"
-                journalctl -u sing-box -n 20 --no-pager
+                # 无后端，假定用户给的就是 JSON
+                FINAL_URL="$SUB_URL"
             fi
+        fi
+    fi
+
+    # 3. 处理网卡绑定
+    CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
+    MANUAL_IF="$CURRENT_PREF"
+    if [[ -z "$MANUAL_IF" ]]; then
+        # 简单自动检测
+        MANUAL_IF="" 
+    fi
+
+    echo "正在生成配置..."
+
+    if [ "$USE_ADVANCED_MODE" = true ]; then
+        # === 高级模式 (reF1nd 专用) ===
+        # 注入 providers，保留 filter，并把 selector 指向 provider
+        
+        if [[ -z "$FINAL_URL" ]]; then
+             # 仅刷新网卡，不改订阅
+             jq --arg iface "$MANUAL_IF" '.outbounds |= map(if .type == "direct" and $iface != "" then . + { "bind_interface": $iface } else . end)' "$LOCAL_TEMPLATE" > "$CONFIG_FILE"
         else
-             echo -e "\033[31m配置校验失败！可能是模板格式有误。\033[0m"
-             "$SINGBOX_BIN" check -c "$CONFIG_FILE"
+             jq --arg url "$FINAL_URL" --arg iface "$MANUAL_IF" '
+               .outbound_providers = [
+                 {
+                   "tag": "my_subscription",
+                   "type": "remote",
+                   "download_url": $url,
+                   "path": "./providers/proxy.json",
+                   "download_interval": "24h",
+                   "download_ua": "sing-box",
+                   "includes": []
+                 }
+               ] |
+               .outbounds |= map(
+                 if .filter then
+                    . + { "providers": ["my_subscription"] }
+                 else . end
+               ) |
+               .outbounds |= map(
+                 if .type == "direct" and $iface != "" then
+                    . + { "bind_interface": $iface }
+                 else . end
+               )
+            ' "$LOCAL_TEMPLATE" > "$CONFIG_FILE"
+        fi
+
+    else
+        # === 兼容模式 (删除不支持的字段) ===
+        jq --arg iface "$MANUAL_IF" 'del(.outbound_providers) | del(.outbounds[].filter) | del(.outbounds[].providers) | .outbounds |= map(if .type == "direct" and $iface != "" then . + { "bind_interface": $iface } else . end)' "$LOCAL_TEMPLATE" > "$CONFIG_FILE"
+    fi
+
+    # 4. 验证与重启
+    if [[ $? -eq 0 ]]; then
+        if "$SINGBOX_BIN" check -c "$CONFIG_FILE" >/dev/null 2>&1; then
+            systemctl restart sing-box
+            echo -e "\033[32m配置更新成功！服务已重启。\033[0m"
+        else
+            echo -e "\033[31m配置校验失败！可能是转换后的 JSON 格式错误或网络问题。\033[0m"
+            "$SINGBOX_BIN" check -c "$CONFIG_FILE"
         fi
     else
-        echo -e "\033[31mJSON 处理失败 (JQ Error)\033[0m"
+        echo -e "\033[31mJQ 处理失败。\033[0m"
     fi
 }
