@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box Shell 安装脚本 (官方核心版)
+#  Sing-box Shell 安装脚本 (Dual Core)
 # ==========================================
 
 RED='\033[0;31m'
@@ -9,8 +9,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 PLAIN='\033[0m'
 
-# !!! 注意：请修改为你存放修改后脚本的仓库地址 !!!
-REPO_URL="https://raw.githubusercontent.com/your-repo/sb-shell-official/main"
 INSTALL_DIR="/etc/sbshell"
 BIN_LINK="/usr/local/bin/sbshell"
 
@@ -28,19 +26,18 @@ mkdir -p "$INSTALL_DIR/templates"
 mkdir -p "$INSTALL_DIR/logs"
 mkdir -p "$INSTALL_DIR/providers"
 
-# 3. 下载文件 (如果不使用远程下载，请手动将上述脚本复制到 $INSTALL_DIR)
-# download_file() { ... } 
-# 此处逻辑取决于你如何分发这些新脚本。
-# 如果是本地直接运行，只需确保上述文件都在 /etc/sbshell/ 下并赋予执行权限。
-
-# 建立软链接
-rm -f "$BIN_LINK"
-ln -s "$INSTALL_DIR/menu.sh" "$BIN_LINK"
-chmod +x "$INSTALL_DIR/"*.sh
-chmod +x "$BIN_LINK"
-
+# 3. 提示
 echo -e "\n${GREEN}安装环境准备就绪！${PLAIN}"
-echo -e "1. 请确保 core.sh, menu.sh, sub.sh, safety.sh 已放入 $INSTALL_DIR"
-echo -e "2. 请确保 templates/ 目录下有 tun.json 和 tproxy.json 模板"
-echo -e "3. 输入 ${GREEN}sbshell${PLAIN} 启动菜单"
-echo -e "4. 在菜单中选择 [1] 安装官方核心"
+echo -e "1. 请将 core.sh, menu.sh, sub.sh, safety.sh 放入 $INSTALL_DIR"
+echo -e "2. 确保 templates/ 目录下有 tun.json"
+echo -e "3. 建立链接: ln -s $INSTALL_DIR/menu.sh /usr/local/bin/sbshell && chmod +x /usr/local/bin/sbshell"
+echo -e "4. 输入 ${GREEN}sbshell${PLAIN} 启动菜单，选择 [1] 安装核心 (Official 或 Ref1nd)"
+
+# 自动建立链接 (如果在本地运行)
+if [ -f "$INSTALL_DIR/menu.sh" ]; then
+    rm -f "$BIN_LINK"
+    ln -s "$INSTALL_DIR/menu.sh" "$BIN_LINK"
+    chmod +x "$INSTALL_DIR/"*.sh
+    chmod +x "$BIN_LINK"
+    echo -e "${GREEN}快捷命令 'sbshell' 已创建。${PLAIN}"
+fi

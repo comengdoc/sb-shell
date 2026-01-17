@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box 客户端管理 (官方稳定版)
+#  Sing-box 专家面板 (Official / Ref1nd)
 # ==========================================
 
 WORKDIR="/etc/sbshell"
@@ -27,14 +27,28 @@ uninstall_all() {
     echo -e "${GREEN}卸载完成${PLAIN}"; exit 0
 }
 
+install_menu() {
+    echo -e "-------------------------------------------------------------"
+    echo -e "请选择要安装的内核版本："
+    echo -e "${GREEN}1.${PLAIN} Official (官方稳定版 - SagerNet)"
+    echo -e "${GREEN}2.${PLAIN} Ref1nd   (社区优化版 - 推荐)"
+    echo -e "-------------------------------------------------------------"
+    read -p "选择: " ins_opt
+    case "$ins_opt" in
+        1) install_official ;;
+        2) install_ref1nd ;;
+        *) echo -e "${RED}取消安装${PLAIN}" ;;
+    esac
+}
+
 menu() {
     clear
     echo -e "#############################################################"
-    echo -e "#           Sing-box 专家面板 (Official Core)               #"
+    echo -e "#           Sing-box 专家面板 (Multi-Core)                  #"
     echo -e "#############################################################"
     check_status
     echo -e "-------------------------------------------------------------"
-    echo -e "${GREEN}1.${PLAIN} 安装/更新 官方核心 (SagerNet)"
+    echo -e "${GREEN}1.${PLAIN} 安装/切换 核心版本 (Official/Ref1nd)"
     echo -e "${GREEN}2.${PLAIN} 启动服务"
     echo -e "${GREEN}3.${PLAIN} 停止服务"
     echo -e "${GREEN}4.${PLAIN} 重启服务"
@@ -50,7 +64,7 @@ menu() {
     read -p " 请输入选项: " num
 
     case "$num" in
-        1) install_singbox ;;
+        1) install_menu ;;
         2) start_service ;;
         3) stop_service ;;
         4) restart_service ;;

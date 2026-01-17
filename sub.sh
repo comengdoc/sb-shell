@@ -15,6 +15,12 @@ update_subscription() {
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
     [[ "$MODE" == "TUN" ]] && LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json" || LOCAL_TEMPLATE="$TEMPLATE_DIR/tproxy.json"
     
+    # 兼容性检查：如果 tproxy.json 不存在，回退到 tun.json
+    if [[ ! -f "$LOCAL_TEMPLATE" ]] && [[ "$MODE" == "TPROXY" ]]; then
+        echo -e "\033[33m警告: 找不到 tproxy.json，正在尝试使用 tun.json...\033[0m"
+        LOCAL_TEMPLATE="$TEMPLATE_DIR/tun.json"
+    fi
+    
     if [[ ! -f "$LOCAL_TEMPLATE" ]]; then echo -e "\033[31m错误: 找不到模板 $LOCAL_TEMPLATE\033[0m"; return; fi
 
     PREV_BACKEND=$(cat "$WORKDIR/.backend_url" 2>/dev/null)
@@ -26,31 +32,26 @@ update_subscription() {
 
     read -p "请输入机场订阅链接: " SUB_URL
     
-    # 关键逻辑：如果用户使用了后端，我们需要后端输出 sing-box 格式的节点列表，而不是完整配置
-    # 我们使用 target=sing-box 配合 list=true (如果有此参数) 或者单纯依赖 outbounds 提取
     if [[ -n "$SUB_URL" ]]; then
         if [[ -n "$BACKEND_URL" ]]; then
             echo "正在请求后端..."
             ENCODED_SUB=$(urlencode "$SUB_URL")
-            # 这里的 file 参数使用 ACL4SSR 规则，确保分组匹配
+            # 使用 ACL4SSR 规则进行转换
             FINAL_URL="${BACKEND_URL}/config/${ENCODED_SUB}&file=https://raw.githubusercontent.com/acl4ssr/acl4ssr/master/Clash/config/ACL4SSR_Online_Full.ini"
         else
             FINAL_URL="$SUB_URL"
         fi
     fi
 
-    # 获取网卡
     CURRENT_PREF=$(cat "$PREF_FILE" 2>/dev/null)
     MANUAL_IF=${CURRENT_PREF:-""}
 
     echo "正在生成配置..."
 
-    # 注入逻辑：
-    # 1. 将远程订阅作为一个 provider 插入
-    # 2. 你的模板已经配置了正则筛选，所以只需要把 provider 放进去即可
     if [[ -z "$FINAL_URL" ]]; then
          jq --arg iface "$MANUAL_IF" '.outbounds |= map(if .type == "direct" and $iface != "" then . + { "bind_interface": $iface } else . end)' "$LOCAL_TEMPLATE" > "$CONFIG_FILE"
     else
+         # 基于 tun.json 结构注入 remote provider
          jq --arg url "$FINAL_URL" --arg iface "$MANUAL_IF" '
            .outbound_providers = [
              {

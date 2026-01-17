@@ -1,11 +1,13 @@
 #!/bin/bash
 
 # ==========================================
-#  安装 Sing-box (针对用户模板 7891 端口优化)
+#  Sing-box 核心管理 (适配 Official & Ref1nd)
 # ==========================================
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
-[ ! -f "$SINGBOX_BIN" ] && SINGBOX_BIN="/usr/bin/sing-box"
+# 兼容旧路径，优先使用 /usr/local/bin
+[ -f "/usr/bin/sing-box" ] && rm -f "/usr/bin/sing-box"
+
 CONFIG_DIR="/etc/sing-box"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 SERVICE_FILE="/etc/systemd/system/sing-box.service"
@@ -27,8 +29,15 @@ check_status() {
     fi
 
     if [ -f "$SINGBOX_BIN" ]; then
-        VER_NUM=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
-        VER="${VER_NUM} (Official)"
+        # 尝试获取详细版本信息
+        VER_RAW=$($SINGBOX_BIN version 2>/dev/null)
+        VER_NUM=$(echo "$VER_RAW" | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
+        
+        # 读取安装时的标记 (如果存在)
+        TAG_FILE="$WORKDIR/.version_tag"
+        [ -f "$TAG_FILE" ] && TAG_INFO=" ($(cat "$TAG_FILE"))" || TAG_INFO=""
+        
+        VER="${VER_NUM}${TAG_INFO}"
     else
         VER="${RED}未安装${PLAIN}"
     fi
@@ -37,9 +46,18 @@ check_status() {
     echo -e "运行状态: ${STATUS}  |  当前版本: ${GREEN}${VER}${PLAIN}  |  模式: ${CYAN}${MODE_RAW}${PLAIN}"
 }
 
-install_singbox() {
-    echo -e "${GREEN}正在准备安装 Sing-box 官方核心...${PLAIN}"
+# 通用安装函数
+# 参数 1: Repo Owner (e.g., SagerNet)
+# 参数 2: Repo Name (e.g., sing-box)
+# 参数 3: Tag Label (用于显示，e.g., Official)
+install_core_logic() {
+    REPO_OWNER="$1"
+    REPO_NAME="$2"
+    LABEL="$3"
+
+    echo -e "${GREEN}正在准备安装 Sing-box [${LABEL}] 版本...${PLAIN}"
     
+    # 检查依赖
     if command -v apt-get >/dev/null; then
         apt-get update && apt-get install -y curl wget tar nftables git jq
     elif command -v apk >/dev/null; then
@@ -55,40 +73,71 @@ install_singbox() {
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
 
-    echo -e "${YELLOW}正在获取最新版本...${PLAIN}"
-    LATEST_TAG=$(curl -sL --retry 3 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    [[ -z "$LATEST_TAG" ]] && echo -e "${RED}获取版本失败${PLAIN}" && return
+    echo -e "${YELLOW}正在查询 ${REPO_OWNER}/${REPO_NAME} 最新版本...${PLAIN}"
+    
+    # 获取最新 Release Tag
+    API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+    LATEST_TAG=$(curl -sL --retry 3 "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    if [[ -z "$LATEST_TAG" ]]; then
+        echo -e "${RED}获取版本失败，可能是 API 限制或仓库不存在。${PLAIN}"
+        echo -e "${YELLOW}尝试回退到手动输入版本? (y/n)${PLAIN}"
+        read -p ": " manual_opt
+        if [[ "$manual_opt" == "y" ]]; then
+            read -p "请输入版本号 (例如 v1.8.0): " LATEST_TAG
+        else
+            return
+        fi
+    fi
     
     VERSION_NO_V=${LATEST_TAG#v}
-    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/sing-box-${VERSION_NO_V}-${ARCH_CODE}.tar.gz"
+    
+    # 构建下载链接 (适配通常的命名规则)
+    # 大多数 release 命名为: sing-box-1.8.0-linux-amd64.tar.gz
+    FILE_NAME="sing-box-${VERSION_NO_V}-${ARCH_CODE}.tar.gz"
+    DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${LATEST_TAG}/${FILE_NAME}"
 
-    echo -e "正在下载: $DOWNLOAD_URL"
+    echo -e "检测到版本: ${CYAN}${LATEST_TAG}${PLAIN}"
+    echo -e "下载地址: ${DOWNLOAD_URL}"
+    
     TMP_DIR=$(mktemp -d)
     wget -T 60 -t 3 -O "$TMP_DIR/sb.tar.gz" "$DOWNLOAD_URL" || { echo -e "${RED}下载失败${PLAIN}"; rm -rf "$TMP_DIR"; return; }
     
+    echo -e "正在解压..."
     tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
+    
+    # 查找二进制文件 (处理解压后可能存在的子目录)
     BINARY_FOUND=$(find "$TMP_DIR" -type f -name "sing-box" | head -n 1)
 
     if [[ -n "$BINARY_FOUND" ]]; then
         systemctl stop sing-box 2>/dev/null
-        mv -f "$BINARY_FOUND" "$SINGBOX_BIN"
+        cp -f "$BINARY_FOUND" "$SINGBOX_BIN"
         chmod +x "$SINGBOX_BIN"
-        echo -e "${GREEN}安装成功${PLAIN}"
+        echo -e "${GREEN}核心部署成功${PLAIN}"
     else
-        echo -e "${RED}未找到二进制文件${PLAIN}"; rm -rf "$TMP_DIR"; return
+        echo -e "${RED}解压后未找到 sing-box 二进制文件，结构可能已变更${PLAIN}"
+        rm -rf "$TMP_DIR"
+        return
     fi
     rm -rf "$TMP_DIR"
     
-    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR" "$WORKDIR/providers" "$WORKDIR/ui"
-    echo "Official" > "$WORKDIR/.version_tag"
+    # 标记版本
+    mkdir -p "$WORKDIR"
+    echo "$LABEL" > "$WORKDIR/.version_tag"
 
-    # 下载 Dashboard UI (Yacd/Metacubex)
-    echo -e "${YELLOW}正在安装 Dashboard UI...${PLAIN}"
-    curl -sL -o "$WORKDIR/ui.zip" "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
-    unzip -o -q "$WORKDIR/ui.zip" -d "$WORKDIR/"
-    mv "$WORKDIR/Yacd-meta-gh-pages"/* "$WORKDIR/ui/" 2>/dev/null
-    rm -rf "$WORKDIR/ui.zip" "$WORKDIR/Yacd-meta-gh-pages"
+    # 初始化目录
+    mkdir -p "$CONFIG_DIR" "$TEMPLATE_DIR" "$WORKDIR/providers" "$WORKDIR/ui"
 
+    # 安装 UI (Yacd)
+    if [ ! -d "$WORKDIR/ui/assets" ]; then
+        echo -e "${YELLOW}正在安装 Dashboard UI...${PLAIN}"
+        curl -sL -o "$WORKDIR/ui.zip" "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
+        unzip -o -q "$WORKDIR/ui.zip" -d "$WORKDIR/"
+        mv "$WORKDIR/Yacd-meta-gh-pages"/* "$WORKDIR/ui/" 2>/dev/null
+        rm -rf "$WORKDIR/ui.zip" "$WORKDIR/Yacd-meta-gh-pages"
+    fi
+
+    # 写入 Systemd 服务
     cat > $SERVICE_FILE <<SYSTEMD
 [Unit]
 Description=sing-box service
@@ -112,7 +161,17 @@ SYSTEMD
 
     systemctl daemon-reload
     systemctl enable sing-box
-    echo -e "${GREEN}安装完成!${PLAIN}"
+    echo -e "${GREEN}安装完成! 请运行菜单更新订阅并启动。${PLAIN}"
+}
+
+install_official() {
+    install_core_logic "SagerNet" "sing-box" "Official"
+}
+
+install_ref1nd() {
+    # Ref1nd 的仓库，请确认这是你期望的仓库
+    # 这里假设仓库名为 ref1nd/sing-box
+    install_core_logic "ref1nd" "sing-box" "Ref1nd"
 }
 
 start_service() {
@@ -125,7 +184,10 @@ start_service() {
     fi
 
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
-    if [[ "$MODE" == "TPROXY" ]]; then configure_nftables_tproxy; fi
+    
+    if [[ "$MODE" == "TPROXY" ]]; then 
+        configure_nftables_tproxy
+    fi
     
     systemctl restart sing-box
     sleep 1
@@ -147,21 +209,35 @@ restart_service() { start_service; }
 show_log() { journalctl -u sing-box -f -n 50; }
 
 switch_mode() {
-    echo -e "1. TUN  2. TProxy"
+    echo -e "1. TUN (推荐，适配 tun.json)\n2. TProxy (高级)"
     read -p "选择: " choice
     [[ "$choice" == "1" ]] && echo "TUN" > "$WORKDIR/.mode" && echo "已切换为 TUN"
     [[ "$choice" == "2" ]] && echo "TPROXY" > "$WORKDIR/.mode" && echo "已切换为 TProxy"
 }
 
 configure_nftables_tproxy() {
-    # 修正：此处端口必须对应模板中的 tproxy-in (7891)
+    # 自动适配逻辑：尝试从当前配置文件中读取 TProxy 端口
+    # 如果读取失败，且当前使用的是 tun.json (它通常没有 tproxy-in)，则警告
+    # 默认回退到 7891
+    
+    TP_PORT="7891"
+    
+    if [ -f "$CONFIG_FILE" ] && command -v jq &> /dev/null; then
+        # 尝试查找 tag 为 tproxy-in 的入站端口，或者类型为 tproxy 的第一个入站端口
+        DETECTED_PORT=$(jq '.inbounds[] | select(.type=="tproxy") | .listen_port' "$CONFIG_FILE" 2>/dev/null | head -1)
+        if [ -n "$DETECTED_PORT" ] && [ "$DETECTED_PORT" != "null" ]; then
+            TP_PORT="$DETECTED_PORT"
+            echo -e "${CYAN}自动检测到 TProxy 端口: $TP_PORT${PLAIN}"
+        fi
+    fi
+
     nft flush ruleset
     nft -f - <<NFT
 table ip singbox {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
         ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255, 192.168.0.0/16, 10.0.0.0/8 } return
-        meta l4proto { tcp, udp } meta mark set 1 tproxy to :7891 accept
+        meta l4proto { tcp, udp } meta mark set 1 tproxy to :$TP_PORT accept
     }
     chain output {
         type route hook output priority mangle; policy accept;
