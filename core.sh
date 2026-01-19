@@ -209,9 +209,18 @@ start_service() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
     
+    # 自动获取默认网卡
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
+    
+    # 确保 singbox 表存在
+    nft add table ip singbox 2>/dev/null
+    
+    # 添加 NAT 链和规则 (如果不存在)
+    nft add chain ip singbox nat_postrouting { type nat hook postrouting priority 100 \; } 2>/dev/null
+    
     if [ -n "$DEFAULT_IF" ]; then
-        iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE
+        # 对默认网卡开启伪装
+        nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
     fi
 
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
