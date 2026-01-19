@@ -64,7 +64,8 @@ install_official() {
     
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|armv8) ARCH_CODE="linux-armv8" ;;
+        # 修正点：官方版本使用 arm64，不是 armv8
+        aarch64|armv8) ARCH_CODE="linux-arm64" ;;
         x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
@@ -76,7 +77,7 @@ install_official() {
     LATEST_TAG=$(curl -sL --retry 3 "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     
     if [[ -z "$LATEST_TAG" ]]; then
-        echo -e "${RED}API 获取失败，请输入版本号 (例如 v1.10.0): ${PLAIN}"
+        echo -e "${RED}API 获取失败，请输入版本号 (例如 v1.11.0): ${PLAIN}"
         read -p ": " LATEST_TAG
         [[ -z "$LATEST_TAG" ]] && return
     fi
@@ -86,6 +87,7 @@ install_official() {
     DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/${FILE_NAME}"
 
     echo -e "版本: ${CYAN}${LATEST_TAG}${PLAIN}"
+    echo -e "下载源: ${CYAN}SagerNet (Official)${PLAIN}"
     install_download_logic "$DOWNLOAD_URL" "Official"
 }
 
