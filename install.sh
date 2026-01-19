@@ -14,7 +14,7 @@ BIN_LINK="/usr/local/bin/sbshell"
 
 # --- 关键修改 1: 定义你的仓库地址 ---
 # 请将下面这个地址换成你实际存放脚本的 GitHub Raw 地址
-REPO_URL="https://raw.githubusercontent.com/你的用户名/你的仓库/main"
+REPO_URL="https://raw.githubusercontent.com/comengdoc/sb-shell/main"
 # ----------------------------------
 
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 用户${PLAIN}" && exit 1
