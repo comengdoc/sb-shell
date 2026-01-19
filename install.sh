@@ -61,8 +61,8 @@ download_file "$REPO_URL" "$INSTALL_DIR" "safety.sh"
 
 # 下载模板文件到 /etc/sbshell/templates
 # 注意：确保你仓库里的文件名叫 tun.json 和 tproxy.json
-download_file "$REPO_URL" "$INSTALL_DIR/templates" "tun.json"
-download_file "$REPO_URL" "$INSTALL_DIR/templates" "tproxy.json" 
+download_file "$REPO_URL/templates" "$INSTALL_DIR/templates" "tun.json"
+download_file "$REPO_URL/templates" "$INSTALL_DIR/templates" "tproxy.json"
 
 # 4. 自动赋权与链接
 echo -e "${YELLOW}4. 设置权限与快捷方式...${PLAIN}"
