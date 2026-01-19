@@ -206,33 +206,43 @@ SYSTEMD
 #  启动与网络配置
 # ==========================================
 start_service() {
+    # 1. 开启内核转发
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
     
+    # 2. 处理运行模式 (TUN 或 TPROXY)
+    MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
+    
+    if [[ "$MODE" == "TPROXY" ]]; then 
+        configure_nftables_tproxy
+    else
+        # TUN 模式下，清理 TProxy 遗留的路由规则
+        ip rule del fwmark 1 table 100 2>/dev/null
+        ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
+        # 注意：这里删除了旧的 nft delete table 命令，防止误删 NAT
+    fi
+
+    # 3. 【关键】最后一步添加 NAT 伪装，确保不被覆盖
     # 自动获取默认网卡
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     
     # 确保 singbox 表存在
     nft add table ip singbox 2>/dev/null
     
-    # 添加 NAT 链和规则 (如果不存在)
+    # 添加 NAT 链
     nft add chain ip singbox nat_postrouting { type nat hook postrouting priority 100 \; } 2>/dev/null
+    
+    # 清理旧的 masquerade 规则防止重复，然后添加新规则
+    nft flush chain ip singbox nat_postrouting 2>/dev/null
     
     if [ -n "$DEFAULT_IF" ]; then
         # 对默认网卡开启伪装
         nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
+        echo -e "已添加 NAT 伪装规则 -> 网卡: $DEFAULT_IF"
+    else
+        echo -e "${RED}警告: 未找到默认网卡，NAT 伪装可能失败${PLAIN}"
     fi
 
-    MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
-    
-    if [[ "$MODE" == "TPROXY" ]]; then 
-        configure_nftables_tproxy
-    else
-        nft delete table ip singbox 2>/dev/null
-        ip rule del fwmark 1 table 100 2>/dev/null
-        ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
-    fi
-    
     systemctl restart sing-box
     sleep 1
     if systemctl is-active --quiet sing-box; then 
