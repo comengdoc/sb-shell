@@ -2,8 +2,11 @@
 
 # ==========================================
 #  Sing-box 核心管理 (Expert Modified)
-#  优化: 修复 Ref1nd 下载源，增强 TProxy 逻辑
+#  优化: 修复 CrashCore 识别 / 目录缺失 / 兼容旧版配置
 # ==========================================
+
+# [关键修复] 开启兼容模式，防止 Sub-Store 转换的配置报错 (Legacy Special Outbounds)
+export ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true
 
 SINGBOX_BIN="/usr/local/bin/sing-box"
 # 清理旧的干扰文件
@@ -33,11 +36,8 @@ check_status() {
         # 尝试获取详细版本信息
         VER_RAW=$($SINGBOX_BIN version 2>/dev/null)
         VER_NUM=$(echo "$VER_RAW" | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
-        
-        # 读取安装时的标记 (如果存在)
         TAG_FILE="$WORKDIR/.version_tag"
         [ -f "$TAG_FILE" ] && TAG_INFO=" ($(cat "$TAG_FILE"))" || TAG_INFO=""
-        
         VER="${VER_NUM}${TAG_INFO}"
     else
         VER="${RED}未安装${PLAIN}"
@@ -53,26 +53,22 @@ check_status() {
 install_official() {
     echo -e "${GREEN}正在准备安装 Sing-box [Official/SagerNet] 版本...${PLAIN}"
     
-    # 基础依赖检查
+    # 依赖检查
     if command -v apt-get >/dev/null; then
         apt-get update && apt-get install -y curl wget tar nftables git jq
     elif command -v apk >/dev/null; then
         apk add curl wget tar nftables git jq
-    elif command -v yum >/dev/null; then
-        yum install -y curl wget tar nftables git jq
     fi
     
     ARCH=$(uname -m)
     case $ARCH in
-        # 修正点：官方版本使用 arm64，不是 armv8
+        # 修正: 官方版使用 linux-arm64
         aarch64|armv8) ARCH_CODE="linux-arm64" ;;
         x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
 
     echo -e "${YELLOW}正在查询 SagerNet/sing-box 最新版本...${PLAIN}"
-    
-    # 获取最新 Release Tag
     API_URL="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
     LATEST_TAG=$(curl -sL --retry 3 "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     
@@ -92,14 +88,12 @@ install_official() {
 }
 
 # ==========================================
-#  核心安装逻辑 (Ref1nd/PuerNya - Modified)
-#  使用 DustinWin 仓库以保证文件名稳定性
+#  核心安装逻辑 (Ref1nd - DustinWin)
 # ==========================================
 install_ref1nd() {
-    echo -e "${GREEN}正在准备安装 Sing-box [PuerNya/Ref1nd] 版本...${PLAIN}"
+    echo -e "${GREEN}正在准备安装 Sing-box [Ref1nd] 版本...${PLAIN}"
     echo -e "${YELLOW}注意: 此版本包含更多协议支持与去广告优化 (Source: DustinWin)${PLAIN}"
 
-    # 基础依赖检查
     if command -v apt-get >/dev/null; then
         apt-get update && apt-get install -y curl wget tar nftables git jq
     elif command -v apk >/dev/null; then
@@ -107,21 +101,23 @@ install_ref1nd() {
     fi
 
     ARCH=$(uname -m)
+    # 修正: 适配 DustinWin 新版命名规则 (linux-armv8)
     case $ARCH in
-        aarch64|armv8) FILE_NAME="sing-box-linux-armv8.tar.gz" ;;
-        x86_64|amd64)  FILE_NAME="sing-box-linux-amd64.tar.gz" ;;
+        aarch64|armv8) FILE_NAME="sing-box-ref1nd-main-linux-armv8.tar.gz" ;;
+        x86_64|amd64)  FILE_NAME="sing-box-ref1nd-main-linux-amd64.tar.gz" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
 
-    # 使用固定链接，避免 API 文件名解析错误
+    # 修正: 正确的下载地址结构
     DOWNLOAD_URL="https://github.com/DustinWin/proxy-tools/releases/download/sing-box/${FILE_NAME}"
     
-    echo -e "下载源: ${CYAN}DustinWin/proxy-tools${PLAIN}"
+    echo -e "下载源: ${CYAN}DustinWin/proxy-tools (Ref1nd-Main)${PLAIN}"
+    echo -e "文件URL: ${CYAN}${DOWNLOAD_URL}${PLAIN}"
     install_download_logic "$DOWNLOAD_URL" "Ref1nd"
 }
 
 # ==========================================
-#  通用下载与部署函数
+#  通用下载与部署函数 (修复 CrashCore 识别)
 # ==========================================
 install_download_logic() {
     URL="$1"
@@ -129,12 +125,14 @@ install_download_logic() {
     
     TMP_DIR=$(mktemp -d)
     echo -e "正在下载..."
-    wget -T 60 -t 3 -O "$TMP_DIR/sb.tar.gz" "$URL" || { echo -e "${RED}下载失败，请检查网络${PLAIN}"; rm -rf "$TMP_DIR"; return; }
+    # 增加 User-Agent 和重定向跟随
+    wget -T 60 -t 3 -U "Mozilla/5.0" -O "$TMP_DIR/sb.tar.gz" "$URL" || { echo -e "${RED}下载失败，请检查网络或 URL 是否有效${PLAIN}"; rm -rf "$TMP_DIR"; return; }
     
     echo -e "正在解压..."
     tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
     
-    BINARY_FOUND=$(find "$TMP_DIR" -type f -name "sing-box" | head -n 1)
+    # === 关键修正: 同时查找 sing-box 和 CrashCore ===
+    BINARY_FOUND=$(find "$TMP_DIR" -type f \( -name "sing-box" -o -name "CrashCore" \) | head -n 1)
 
     if [[ -n "$BINARY_FOUND" ]]; then
         systemctl stop sing-box 2>/dev/null
@@ -145,15 +143,21 @@ install_download_logic() {
         mkdir -p "$WORKDIR"
         echo "$LABEL" > "$WORKDIR/.version_tag"
         
-        # 安装/更新 UI
-        install_ui
+        # === 关键修正: 确保配置目录存在 ===
+        if [ ! -d "$CONFIG_DIR" ]; then
+            echo -e "${YELLOW}正在创建配置目录: $CONFIG_DIR ...${PLAIN}"
+            mkdir -p "$CONFIG_DIR"
+            chmod 777 "$CONFIG_DIR"
+        fi
         
-        # 写入 Service
+        install_ui
         write_service
         
         echo -e "${GREEN}核心部署成功 [${LABEL}]${PLAIN}"
     else
-        echo -e "${RED}解压后未找到二进制文件${PLAIN}"
+        echo -e "${RED}解压后未找到二进制文件 (sing-box 或 CrashCore)${PLAIN}"
+        echo -e "调试信息 - 解压目录内容:"
+        ls -R "$TMP_DIR"
     fi
     rm -rf "$TMP_DIR"
 }
@@ -180,7 +184,8 @@ After=network.target nss-lookup.target network-online.target
 [Service]
 User=root
 Group=root
-# 关键权限，用于 TUN 和 TProxy
+# 开启兼容模式 (解决 FATAL: legacy special outbounds 错误)
+Environment="ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true"
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=$SINGBOX_BIN run -c $CONFIG_FILE -D $CONFIG_DIR
@@ -201,43 +206,35 @@ SYSTEMD
 #  启动与网络配置
 # ==========================================
 start_service() {
-    # 1. 确保 IP 转发开启
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
     sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
     
-    # 2. 自动 NAT (Masquerade)
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     if [ -n "$DEFAULT_IF" ]; then
-        # 检查是否已存在规则，避免重复添加
         iptables -t nat -C POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$DEFAULT_IF" -j MASQUERADE
     fi
 
-    # 3. 检查模式并配置 nftables
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
     
     if [[ "$MODE" == "TPROXY" ]]; then 
         configure_nftables_tproxy
     else
-        # 如果是 TUN 模式，清理掉可能残留的 TProxy 规则
         nft delete table ip singbox 2>/dev/null
         ip rule del fwmark 1 table 100 2>/dev/null
         ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
     fi
     
-    # 4. 启动服务
     systemctl restart sing-box
     sleep 1
     if systemctl is-active --quiet sing-box; then 
         echo -e "${GREEN}服务已启动 ($MODE模式)${PLAIN}"
     else 
         echo -e "${RED}启动失败，建议运行 'journalctl -u sing-box -n 20' 查看日志${PLAIN}"
-        echo -e "${YELLOW}提示: 如果是初次安装，请先生成订阅配置 (sub.sh)。${PLAIN}"
     fi
 }
 
 stop_service() {
     systemctl stop sing-box
-    # 清理所有网络劫持规则
     nft delete table ip singbox 2>/dev/null
     ip rule del fwmark 1 table 100 2>/dev/null
     ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
@@ -248,33 +245,25 @@ restart_service() { start_service; }
 show_log() { journalctl -u sing-box -f -n 50; }
 
 switch_mode() {
-    echo -e "1. TUN (推荐，稳定性好)\n2. TProxy (高级，性能更好)"
+    echo -e "1. TUN (推荐)\n2. TProxy (高级)"
     read -p "选择: " choice
     [[ "$choice" == "1" ]] && echo "TUN" > "$WORKDIR/.mode" && echo "已切换为 TUN"
     [[ "$choice" == "2" ]] && echo "TPROXY" > "$WORKDIR/.mode" && echo "已切换为 TProxy"
 }
 
 configure_nftables_tproxy() {
-    TP_PORT="7891" # 默认端口
-    
-    # 尝试从配置文件智能读取端口
+    TP_PORT="7891"
     if [ -f "$CONFIG_FILE" ] && command -v jq &> /dev/null; then
         DETECTED_PORT=$(jq '.inbounds[] | select(.type=="tproxy") | .listen_port' "$CONFIG_FILE" 2>/dev/null | head -1)
-        if [ -n "$DETECTED_PORT" ] && [ "$DETECTED_PORT" != "null" ]; then
-            TP_PORT="$DETECTED_PORT"
-            echo -e "${CYAN}检测到 TProxy 端口: $TP_PORT${PLAIN}"
-        fi
+        [ -n "$DETECTED_PORT" ] && [ "$DETECTED_PORT" != "null" ] && TP_PORT="$DETECTED_PORT"
     fi
 
-    # 刷新并应用 nftables 规则
-    nft flush ruleset 2>/dev/null # 慎用 flush，这里仅为了演示，实际建议只操作 singbox 表
+    nft flush ruleset 2>/dev/null
     nft -f - <<NFT
 table ip singbox {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
-        # 排除私有网段 (防止内网不通)
         ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } return
-        # 劫持 TCP 和 UDP
         meta l4proto { tcp, udp } meta mark set 1 tproxy to :$TP_PORT accept
     }
     chain output {
@@ -285,7 +274,6 @@ table ip singbox {
     }
 }
 NFT
-    # 配置策略路由
     ip rule add fwmark 1 table 100 2>/dev/null
     ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null
 }

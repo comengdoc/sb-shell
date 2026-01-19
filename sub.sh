@@ -74,7 +74,7 @@ update_subscription() {
                 "url": $url,
                 "path": "./providers/substore_cache.json",
                 "download_interval": "60m",
-                "download_detour": "direct", 
+                "download_detour": "🎯 全球直连", 
                 "healthcheck_interval": "10m",
                 "healthcheck_url": "https://www.gstatic.com/generate_204"
             }
