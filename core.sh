@@ -64,7 +64,7 @@ install_official() {
     
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|armv8) ARCH_CODE="linux-arm64" ;;
+        aarch64|armv8) ARCH_CODE="linux-armv8" ;;
         x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
