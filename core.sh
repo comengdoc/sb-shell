@@ -106,7 +106,7 @@ install_ref1nd() {
 
     ARCH=$(uname -m)
     case $ARCH in
-        aarch64|armv8) FILE_NAME="sing-box-linux-arm64.tar.gz" ;;
+        aarch64|armv8) FILE_NAME="sing-box-linux-armv8.tar.gz" ;;
         x86_64|amd64)  FILE_NAME="sing-box-linux-amd64.tar.gz" ;;
         *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
     esac
