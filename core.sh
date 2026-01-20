@@ -186,8 +186,12 @@ User=root
 Group=root
 # 开启兼容模式 (解决 FATAL: legacy special outbounds 错误)
 Environment="ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true"
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+
+# === 修改说明: 注释掉能力限制，赋予完整 Root 权限以修复 TUN 报错 ===
+# CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+# AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+# ================================================================
+
 ExecStart=$SINGBOX_BIN run -c $CONFIG_FILE -D $CONFIG_DIR
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
