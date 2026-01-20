@@ -206,45 +206,63 @@ SYSTEMD
 #  启动与网络配置
 # ==========================================
 start_service() {
-    # 1. 开启内核转发
+    # ==================================================
+    # 1. 内核参数调整
+    # ==================================================
+    # 开启 IPv4 转发
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    # 【关键】开启 Mark 验证，防止 TProxy/策略路由流量被内核丢弃
+    sysctl -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1
     
-    # 2. 处理运行模式 (TUN 或 TPROXY)
+    # 【建议】彻底禁用 IPv6，防止 iPad 等设备通过 IPv6 绕过代理 (如需 IPv6 请自行开启)
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
+    # sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1  # 旧的转发命令，已注释
+
+    # ==================================================
+    # 2. 启动 Sing-box 服务
+    # ==================================================
     MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
+    
+    # 清理旧的策略路由 (防止重复叠加报错)
+    ip rule del from 192.168.0.0/16 lookup 2022 >/dev/null 2>&1
     
     if [[ "$MODE" == "TPROXY" ]]; then 
         configure_nftables_tproxy
     else
-        # TUN 模式下，清理 TProxy 遗留的路由规则
+        # TUN 模式清理 TProxy 残留
         ip rule del fwmark 1 table 100 2>/dev/null
         ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
-        # 注意：这里删除了旧的 nft delete table 命令，防止误删 NAT
+        
+        # 【至关重要】添加局域网引流规则
+        # 解释：让所有来自 192.168.x.x 的流量都去查表 2022 (Sing-box 的 TUN 表)
+        # 请根据你的实际局域网网段修改，192.168.0.0/16 涵盖了大部分家用网段
+        ip rule add from 192.168.0.0/16 lookup 2022
+        echo -e "已添加局域网引流规则: 192.168.0.0/16 -> Table 2022"
     fi
 
-    # 3. 【关键】最后一步添加 NAT 伪装，确保不被覆盖
-    # 自动获取默认网卡
+    # ==================================================
+    # 3. 配置 NAT 伪装 (让回程流量能找到家)
+    # ==================================================
     DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
     
-    # 确保 singbox 表存在
+    # 使用 nftables 设置 NAT
     nft add table ip singbox 2>/dev/null
-    
-    # 添加 NAT 链
     nft add chain ip singbox nat_postrouting { type nat hook postrouting priority 100 \; } 2>/dev/null
-    
-    # 清理旧的 masquerade 规则防止重复，然后添加新规则
     nft flush chain ip singbox nat_postrouting 2>/dev/null
     
     if [ -n "$DEFAULT_IF" ]; then
-        # 对默认网卡开启伪装
         nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
-        echo -e "已添加 NAT 伪装规则 -> 网卡: $DEFAULT_IF"
+        echo -e "已添加 NAT 伪装规则 -> 出口网卡: $DEFAULT_IF"
     else
         echo -e "${RED}警告: 未找到默认网卡，NAT 伪装可能失败${PLAIN}"
     fi
 
+    # 重启服务
     systemctl restart sing-box
     sleep 1
+    
+    # 状态检查
     if systemctl is-active --quiet sing-box; then 
         echo -e "${GREEN}服务已启动 ($MODE模式)${PLAIN}"
     else 
