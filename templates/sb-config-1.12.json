@@ -5,8 +5,8 @@
   },
   "experimental": {
     "clash_api": {
-      "external_controller": "0.0.0.0:9095",
-      "external_ui": "/etc/sbshell/ui",
+      "external_controller": "0.0.0.0:9090",
+      "external_ui": "/etc/sbshell/ui/",
       "secret": "",
       "external_ui_download_url": "https://gh-proxy.com/https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
       "external_ui_download_detour": "direct",
@@ -83,14 +83,16 @@
       }
     ],
     "independent_cache": true,
-    "strategy": "ipv4_only"
+    "strategy": "prefer_ipv4"
   },
   "inbounds": [
     {
       "tag": "tun-in",
       "type": "tun",
+      "mtu": 1400,
       "address": [
-        "172.19.0.0/30"
+        "172.19.0.0/30",
+        "fdfe:dcba:9876::0/126"
       ],
       "stack": "system",
       "auto_route": true,
@@ -106,7 +108,7 @@
     {
       "tag": "mixed-in",
       "type": "mixed",
-      "listen": "127.0.0.1",
+      "listen": "0.0.0.0",
       "listen_port": 7890
     }
   ],
@@ -406,6 +408,11 @@
       {
         "inbound": ["tun-in", "mixed-in"],
         "action": "sniff"
+      },
+      {                                 
+        "protocol": "udp",
+        "port": 443,
+        "action": "reject"
       },
       {
         "type": "logical",
