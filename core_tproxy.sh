@@ -211,7 +211,9 @@ start_service() {
     configure_nftables_tproxy
 
     # 4. 配置 NAT 伪装
-    DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
+    #DEFAULT_IF=$(ip route show default | awk '/default/ {print $5}' | head -1)
+    # 强制指定网卡，防止检测失败
+    DEFAULT_IF="eth0"
     
     nft add table ip singbox 2>/dev/null
     # 注意: TProxy 模式下，NAT 链不需要与 TProxy 链混淆，只需处理出站伪装
