@@ -246,7 +246,7 @@
       "tag": "🇭🇰 香港手动",
       "type": "selector",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
@@ -267,7 +267,7 @@
       "tag": "🇯🇵 日本手动",
       "type": "selector",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
@@ -288,7 +288,7 @@
       "tag": "🇸🇬 狮城手动",
       "type": "selector",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
@@ -309,7 +309,7 @@
       "tag": "🇺🇲 美国手动",
       "type": "selector",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
@@ -330,7 +330,7 @@
       "tag": "🐸 手动选择",
       "type": "selector",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
@@ -345,7 +345,7 @@
       "tag": "♻️ 自动选择",
       "type": "urltest",
       "outbounds": [
-        "🚀 默认代理"
+        "🎯 全球直连"
       ],
       "filter": [
         {
