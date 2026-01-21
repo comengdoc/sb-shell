@@ -371,10 +371,6 @@
     {
       "tag": "🎯 全球直连",
       "type": "direct"
-    },
-    {
-      "tag": "dns-out",
-      "type": "dns"
     }
   ],
   "route": {
@@ -682,11 +678,13 @@
       "server": "public"
     }
   },
-  "cache_file": {
-    "enabled": true,
-    "path": "/etc/sing-box/cache.db",
-    "store_fakeip": true,
-    "store_rdrc": true
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "/etc/sing-box/cache.db",
+      "store_fakeip": true,
+      "store_rdrc": true
+    }
   },
   "clash_api": {
     "external_controller": "0.0.0.0:9090",
