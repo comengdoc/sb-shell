@@ -6,7 +6,7 @@
   "experimental": {
     "clash_api": {
       "external_controller": "0.0.0.0:9095",
-      "external_ui": "etc/sbshell/ui/",
+      "external_ui": "etc/sing-box/ui",
       "secret": "",
       "external_ui_download_url": "https://gh-proxy.com/https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip",
       "external_ui_download_detour": "direct",
@@ -48,16 +48,16 @@
         "server": "google"
       },
       {
+        "rule_set": "geosite-cn",
+        "server": "local"
+      },
+      {
         "query_type": [
           "A",
           "AAAA"
         ],
         "rule_set": "geosite-cn",
         "server": "fakeip"
-      },
-      {
-        "rule_set": "geosite-cn",
-        "server": "local"
       },
       {
         "type": "logical",
@@ -103,7 +103,7 @@
     {
       "tag": "mixed-in",
       "type": "mixed",
-      "listen": "127.0.0.1",
+      "listen": "0.0.0.0",
       "listen_port": 7890
     }
   ],
@@ -397,7 +397,7 @@
     "default_domain_resolver": {
       "server": "local"
     },
-    "auto_detect_interface": true,
+    "auto_detect_interface": false,
     "final": "Proxy",
     "rules": [
       {
