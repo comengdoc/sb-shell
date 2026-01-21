@@ -704,6 +704,12 @@
       "listen_port": 7895,
       "sniff": true,
       "sniff_override_destination": true
+    },
+    {
+      "type": "direct",
+      "tag": "dns-in",
+      "listen": "0.0.0.0",
+      "listen_port": 53
     }
   ],
   "experimental": {
