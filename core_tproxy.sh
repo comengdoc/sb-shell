@@ -3,6 +3,7 @@
 # ==========================================
 #  Sing-box 核心管理 (TProxy 旁路由整合版)
 #  功能: 下载安装、版本管理 + 修复后的旁路由网络逻辑
+#  修复: 2026-01-22 (增加内核模块自动加载 & 依赖补全)
 # ==========================================
 
 # 开启兼容模式，防止 Sub-Store 转换的配置报错
@@ -25,7 +26,7 @@ CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
 # ==========================================
-#  1. 状态检查与安装功能 (保留原版功能)
+#  1. 状态检查与安装功能
 # ==========================================
 check_status() {
     if systemctl is-active --quiet sing-box; then
@@ -90,10 +91,15 @@ install_ref1nd() {
 }
 
 install_deps() {
+    # 2026-01-22 修复：增加对 chrony, ca-certificates, iproute2 的检查
+    echo -e "${YELLOW}正在检查系统依赖...${PLAIN}"
     if command -v apt-get >/dev/null; then
-        apt-get update && apt-get install -y curl wget tar nftables git jq
+        apt-get update
+        apt-get install -y curl wget tar nftables git jq ca-certificates iproute2 chrony tzdata
+        systemctl enable --now chrony >/dev/null 2>&1
     elif command -v apk >/dev/null; then
-        apk add curl wget tar nftables git jq
+        apk add curl wget tar nftables git jq ca-certificates iproute2 chrony tzdata
+        rc-service chronyd start
     fi
 }
 
@@ -166,10 +172,18 @@ SYSTEMD
 }
 
 # ==========================================
-#  2. 核心网络逻辑 (已替换为修复版)
+#  2. 核心网络逻辑 (修复版)
 # ==========================================
 start_service() {
     echo -e "${YELLOW}正在启动 Sing-box (旁路由 TProxy 模式)...${PLAIN}"
+
+    # 0. 【关键修复】强制加载 NFTables TProxy 和 NAT 所需的内核模块
+    #    解决 "nft_nat" 未加载导致 masquerade 失败的问题
+    echo -e "正在加载内核模块..."
+    modprobe nft_tproxy >/dev/null 2>&1
+    modprobe nft_socket >/dev/null 2>&1
+    modprobe nf_conntrack >/dev/null 2>&1
+    modprobe nf_nat >/dev/null 2>&1
 
     # 1. 内核参数优化 (旁路由三件套)
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
@@ -203,6 +217,7 @@ start_service() {
     nft flush chain ip singbox nat_postrouting 2>/dev/null
     
     # 【核心】所有出站流量进行伪装，解决三角路由回程问题
+    # 依赖 nf_nat 模块
     if [ -n "$DEFAULT_IF" ]; then
         nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
         echo -e "NAT 接口 (Masquerade): ${CYAN}$DEFAULT_IF${PLAIN}"
@@ -236,7 +251,7 @@ restart_service() { start_service; }
 show_log() { journalctl -u sing-box -f -n 50; }
 
 # ==========================================
-#  3. NFTables 规则 (已替换为修复版)
+#  3. NFTables 规则
 # ==========================================
 configure_nftables_tproxy() {
     TP_PORT="7895"
@@ -284,10 +299,18 @@ table ip singbox {
         
         # 3. 豁免 NTP (防止时间同步死循环)
         udp dport 123 return
-
-        # 4. 劫持本机流量 (可选，如需 Docker 走代理则保留)
-        # meta l4proto { tcp, udp } meta mark set 1 accept
     }
 }
 NFT
 }
+
+# 增加菜单调用 (可选)
+case "\$1" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) restart_service ;;
+    log) show_log ;;
+    install_off) install_official ;;
+    install_ref) install_ref1nd ;;
+    *) echo "Usage: \$0 {start|stop|restart|log|install_off|install_ref}" ;;
+esac
