@@ -13,8 +13,8 @@
       },
       {
         "tag": "foreign",
-        "type": "udp",
-        "server": "8.8.8.8"
+        "type": "https", 
+        "server": "https://8.8.8.8/dns-query"
       },
       {
         "tag": "fakeip",
@@ -368,6 +368,10 @@
         ]
       },
       {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
         "ip_is_private": true,
         "outbound": "➡️ 直连"
       },
@@ -690,7 +694,7 @@
       }
     ],
     "final": "🕸️ 兜底策略",
-    "auto_detect_interface": true,
+    "auto_detect_interface": false,
     "default_mark": 255,
     "default_domain_resolver": {
       "server": "public"
@@ -710,6 +714,12 @@
       "tag": "dns-in",
       "listen": "0.0.0.0",
       "listen_port": 53
+    },
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "0.0.0.0",
+      "listen_port": 7890
     }
   ],
   "experimental": {
