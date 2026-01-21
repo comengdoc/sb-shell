@@ -684,12 +684,12 @@
       "path": "/etc/sing-box/cache.db",
       "store_fakeip": true,
       "store_rdrc": true
+    },
+    "clash_api": {
+      "external_controller": "0.0.0.0:9090",
+      "external_ui": "/etc/sbshell/ui",
+      "secret": "",
+      "default_mode": "rule"
     }
-  },
-  "clash_api": {
-    "external_controller": "0.0.0.0:9090",
-    "external_ui": "/etc/sbshell/ui",
-    "secret": "",
-    "default_mode": "rule"
   }
 }
