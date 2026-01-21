@@ -286,7 +286,7 @@ table ip singbox {
         udp dport 123 return
 
         # 4. 劫持本机流量 (可选，如需 Docker 走代理则保留)
-        meta l4proto { tcp, udp } meta mark set 1 accept
+        # meta l4proto { tcp, udp } meta mark set 1 accept
     }
 }
 NFT
