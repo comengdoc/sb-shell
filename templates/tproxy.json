@@ -13,8 +13,9 @@
       },
       {
         "tag": "foreign",
-        "type": "https", 
-        "server": "https://8.8.8.8/dns-query"
+        "type": "tls", 
+        "server": "8.8.8.8",
+        "server_port": 853
       },
       {
         "tag": "fakeip",
