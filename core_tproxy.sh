@@ -255,8 +255,8 @@ show_log() { journalctl -u sing-box -f -n 50; }
 #  NFTables 规则生成 (纯净版)
 # ==========================================
 configure_nftables_tproxy() {
-    # 自动获取端口，默认 7891
-    TP_PORT="7891"
+    # 自动获取端口，默认 7895
+    TP_PORT="7895"
     if [ -f "$CONFIG_FILE" ] && command -v jq &> /dev/null; then
         DETECTED_PORT=$(jq '.inbounds[] | select(.type=="tproxy") | .listen_port' "$CONFIG_FILE" 2>/dev/null | head -1)
         # 增强检测逻辑：如果 jq 返回空或 null，保持默认
