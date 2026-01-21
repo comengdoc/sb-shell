@@ -1,29 +1,38 @@
 #!/bin/bash
 
 # ==========================================
-#  Sing-box 专家面板 (Official / Ref1nd)
+#  Sing-box 专家面板 (TProxy Dedicated)
 # ==========================================
 
+# 1. 基础定位 (用于寻找核心文件)
 WORKDIR="/etc/sbshell"
-BACKUP_DIR="/root/sb-shell-backups"
+
+# 2. 加载核心 (核心文件是"单点真理"，包含了颜色、路径和通用函数)
+if [ -f "$WORKDIR/core_tproxy.sh" ]; then 
+    source "$WORKDIR/core_tproxy.sh"
+else 
+    echo -e "\033[0;31m缺失核心文件 core_tproxy.sh\033[0m"
+    exit 1
+fi
+
+# 3. 加载扩展模块 (简化写法)
+[ -f "$WORKDIR/sub.sh" ] && source "$WORKDIR/sub.sh"
+[ -f "$WORKDIR/safety.sh" ] && source "$WORKDIR/safety.sh"
+
+# 4. 定义仅 Menu 使用的变量
 LINK_FILE="/usr/local/bin/sbshell"
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-PLAIN='\033[0m'
+BACKUP_DIR="/root/sb-shell-backups"
 
-# 检查核心组件
-if [ -f "$WORKDIR/core.sh" ]; then source "$WORKDIR/core.sh"; else echo -e "${RED}缺失核心文件 core.sh${PLAIN}"; exit 1; fi
-if [ -f "$WORKDIR/sub.sh" ]; then source "$WORKDIR/sub.sh"; fi
-if [ -f "$WORKDIR/safety.sh" ]; then source "$WORKDIR/safety.sh"; fi
-
+# 检查 Root
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 需要 root 权限${PLAIN}" && exit 1
 
 uninstall_all() {
     echo -e "${RED}确定卸载所有组件? [y/N]${PLAIN}"; read -p ": " c; [[ "$c" != "y" ]] && return
-    stop_service 2>/dev/null; systemctl disable sing-box 2>/dev/null
-    rm -f "$SERVICE_FILE" "$SINGBOX_BIN" "$LINK_FILE"; rm -rf "$CONFIG_DIR" "$WORKDIR" "$BACKUP_DIR"
+    # stop_service 来自 core_tproxy.sh
+    stop_service 2>/dev/null
+    systemctl disable sing-box 2>/dev/null
+    rm -f "$SERVICE_FILE" "$SINGBOX_BIN" "$LINK_FILE"
+    rm -rf "$CONFIG_DIR" "$WORKDIR" "$BACKUP_DIR"
     echo -e "${GREEN}卸载完成${PLAIN}"; exit 0
 }
 
@@ -44,7 +53,7 @@ install_menu() {
 menu() {
     clear
     echo -e "#############################################################"
-    echo -e "#           Sing-box 专家面板 (Multi-Core)                  #"
+    echo -e "#        Sing-box TProxy 专用面板 (Armbian/Linux)           #"
     echo -e "#############################################################"
     check_status
     echo -e "-------------------------------------------------------------"
@@ -54,9 +63,8 @@ menu() {
     echo -e "${GREEN}4.${PLAIN} 重启服务"
     echo -e "${GREEN}5.${PLAIN} 查看日志"
     echo -e "-------------------------------------------------------------"
-    echo -e "${YELLOW}6.${PLAIN} 切换模式 (TUN/TProxy)"
-    echo -e "${YELLOW}7.${PLAIN} 更新订阅 (Provider + Filter)"
-    echo -e "${YELLOW}8.${PLAIN} 编辑模板 (JSON)"
+    echo -e "${YELLOW}6.${PLAIN} 更新订阅 (使用 tproxy.json 模板)"
+    echo -e "${YELLOW}7.${PLAIN} 编辑本地模板 (tproxy.json)"
     echo -e "-------------------------------------------------------------"
     echo -e "${CYAN}s.${PLAIN} 开启防断联 (安全模式)"; echo -e "${CYAN}c.${PLAIN} 取消防断联"
     echo -e "${RED}9.${PLAIN} 卸载脚本"; echo -e "${RED}0.${PLAIN} 退出"
@@ -69,12 +77,16 @@ menu() {
         3) stop_service ;;
         4) restart_service ;;
         5) show_log ;;
-        6) switch_mode ;;
-        7) update_subscription ;;
-        8) 
-           MODE=$(cat "$WORKDIR/.mode" 2>/dev/null || echo "TUN")
-           [[ "$MODE" == "TUN" ]] && vim /etc/sbshell/templates/tun.json || vim /etc/sbshell/templates/tproxy.json
-           echo -e "${YELLOW}提示：修改后请运行 [7] 更新配置以生效${PLAIN}" ;;
+        6) update_subscription ;;
+        7) 
+           # [优化] 使用变量代替硬编码路径
+           if [ -f "$WORKDIR/templates/tproxy.json" ]; then
+               vim "$WORKDIR/templates/tproxy.json"
+               echo -e "${YELLOW}提示：修改后请运行 [6] 更新订阅以重新生成配置${PLAIN}"
+           else
+               echo -e "${RED}错误：未找到模板文件${PLAIN}"
+           fi
+           ;;
         s|S) start_safety_timer ;;
         c|C) stop_safety_timer ;;
         9) uninstall_all ;;
