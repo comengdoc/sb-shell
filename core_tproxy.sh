@@ -1,5 +1,172 @@
+#!/bin/bash
+
 # ==========================================
-#  TProxy 核心启动逻辑 (旁路由优化版)
+#  Sing-box 核心管理 (TProxy 旁路由整合版)
+#  功能: 下载安装、版本管理 + 修复后的旁路由网络逻辑
+# ==========================================
+
+# 开启兼容模式，防止 Sub-Store 转换的配置报错
+export ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true
+
+SINGBOX_BIN="/usr/local/bin/sing-box"
+# 清理可能存在的干扰文件
+[ -f "/usr/bin/sing-box" ] && rm -f "/usr/bin/sing-box"
+
+CONFIG_DIR="/etc/sing-box"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+SERVICE_FILE="/etc/systemd/system/sing-box.service"
+WORKDIR="/etc/sbshell"
+
+# 定义颜色
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+PLAIN='\033[0m'
+
+# ==========================================
+#  1. 状态检查与安装功能 (保留原版功能)
+# ==========================================
+check_status() {
+    if systemctl is-active --quiet sing-box; then
+        STATUS="${GREEN}运行中${PLAIN}"
+    else
+        STATUS="${RED}未运行${PLAIN}"
+    fi
+
+    if [ -f "$SINGBOX_BIN" ]; then
+        VER_RAW=$($SINGBOX_BIN version 2>/dev/null)
+        VER_NUM=$(echo "$VER_RAW" | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
+        TAG_FILE="$WORKDIR/.version_tag"
+        [ -f "$TAG_FILE" ] && TAG_INFO=" ($(cat "$TAG_FILE"))" || TAG_INFO=""
+        VER="${VER_NUM}${TAG_INFO}"
+    else
+        VER="${RED}未安装${PLAIN}"
+    fi
+
+    echo -e "运行状态: ${STATUS}  |  当前版本: ${GREEN}${VER}${PLAIN}  |  架构: ${CYAN}TProxy Only${PLAIN}"
+}
+
+install_official() {
+    echo -e "${GREEN}正在准备安装 Sing-box [Official/SagerNet]...${PLAIN}"
+    install_deps
+    
+    ARCH=$(uname -m)
+    case $ARCH in
+        aarch64|armv8) ARCH_CODE="linux-arm64" ;;
+        x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
+        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
+    esac
+
+    echo -e "${YELLOW}正在查询最新版本...${PLAIN}"
+    API_URL="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+    LATEST_TAG=$(curl -sL --retry 3 "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    
+    if [[ -z "$LATEST_TAG" ]]; then
+        read -p "API 获取失败，请输入版本号 (例如 v1.11.0): " LATEST_TAG
+        [[ -z "$LATEST_TAG" ]] && return
+    fi
+    
+    VERSION_NO_V=${LATEST_TAG#v}
+    FILE_NAME="sing-box-${VERSION_NO_V}-${ARCH_CODE}.tar.gz"
+    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/${FILE_NAME}"
+
+    install_download_logic "$DOWNLOAD_URL" "Official"
+}
+
+install_ref1nd() {
+    echo -e "${GREEN}正在准备安装 Sing-box [Ref1nd] (更多协议/去广告)...${PLAIN}"
+    install_deps
+
+    ARCH=$(uname -m)
+    case $ARCH in
+        aarch64|armv8) FILE_NAME="sing-box-ref1nd-main-linux-armv8.tar.gz" ;;
+        x86_64|amd64)  FILE_NAME="sing-box-ref1nd-main-linux-amd64.tar.gz" ;;
+        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
+    esac
+
+    DOWNLOAD_URL="https://github.com/DustinWin/proxy-tools/releases/download/sing-box/${FILE_NAME}"
+    install_download_logic "$DOWNLOAD_URL" "Ref1nd"
+}
+
+install_deps() {
+    if command -v apt-get >/dev/null; then
+        apt-get update && apt-get install -y curl wget tar nftables git jq
+    elif command -v apk >/dev/null; then
+        apk add curl wget tar nftables git jq
+    fi
+}
+
+install_download_logic() {
+    URL="$1"
+    LABEL="$2"
+    TMP_DIR=$(mktemp -d)
+    
+    echo -e "正在下载: $URL"
+    wget -T 60 -t 3 -U "Mozilla/5.0" -O "$TMP_DIR/sb.tar.gz" "$URL" || { echo -e "${RED}下载失败${PLAIN}"; rm -rf "$TMP_DIR"; return; }
+    
+    tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
+    BINARY_FOUND=$(find "$TMP_DIR" -type f \( -name "sing-box" -o -name "CrashCore" \) | head -n 1)
+
+    if [[ -n "$BINARY_FOUND" ]]; then
+        systemctl stop sing-box 2>/dev/null
+        cp -f "$BINARY_FOUND" "$SINGBOX_BIN"
+        chmod +x "$SINGBOX_BIN"
+        
+        mkdir -p "$WORKDIR" "$CONFIG_DIR"
+        chmod 777 "$CONFIG_DIR"
+        echo "$LABEL" > "$WORKDIR/.version_tag"
+        
+        install_ui
+        write_service
+        echo -e "${GREEN}核心部署成功 [${LABEL}]${PLAIN}"
+    else
+        echo -e "${RED}未找到二进制文件${PLAIN}"
+    fi
+    rm -rf "$TMP_DIR"
+}
+
+install_ui() {
+    if [ ! -d "$WORKDIR/ui/assets" ]; then
+        echo -e "${YELLOW}正在安装 Yacd Dashboard UI...${PLAIN}"
+        mkdir -p "$WORKDIR/ui"
+        TMP_UI=$(mktemp -d)
+        curl -sL -o "$TMP_UI/ui.zip" "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
+        unzip -o -q "$TMP_UI/ui.zip" -d "$TMP_UI"
+        cp -r "$TMP_UI/Yacd-meta-gh-pages"/* "$WORKDIR/ui/" 2>/dev/null
+        rm -rf "$TMP_UI"
+    fi
+}
+
+write_service() {
+    cat > $SERVICE_FILE <<SYSTEMD
+[Unit]
+Description=sing-box service (TProxy)
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target network-online.target
+
+[Service]
+User=root
+Group=root
+Environment="ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true"
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+ExecStart=$SINGBOX_BIN run -c $CONFIG_FILE -D $CONFIG_DIR
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=always
+RestartSec=10s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+
+    systemctl daemon-reload
+    systemctl enable sing-box >/dev/null 2>&1
+}
+
+# ==========================================
+#  2. 核心网络逻辑 (已替换为修复版)
 # ==========================================
 start_service() {
     echo -e "${YELLOW}正在启动 Sing-box (旁路由 TProxy 模式)...${PLAIN}"
@@ -29,7 +196,6 @@ start_service() {
     configure_nftables_tproxy
 
     # 4. 配置强制 NAT (旁路由必须！)
-    # 既然你确认是 eth0，这里直接硬编码
     DEFAULT_IF="eth0"
     
     nft add table ip singbox 2>/dev/null
@@ -40,6 +206,8 @@ start_service() {
     if [ -n "$DEFAULT_IF" ]; then
         nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
         echo -e "NAT 接口 (Masquerade): ${CYAN}$DEFAULT_IF${PLAIN}"
+    else
+        echo -e "${RED}警告: 未找到 eth0 网卡，NAT 可能失败${PLAIN}"
     fi
 
     # 5. 启动服务
@@ -54,8 +222,21 @@ start_service() {
     fi
 }
 
+stop_service() {
+    systemctl stop sing-box
+    # 清理 NFTables
+    nft delete table ip singbox 2>/dev/null
+    # 清理路由策略
+    ip rule del fwmark 1 table 100 2>/dev/null
+    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
+    echo -e "${GREEN}服务已停止并清理规则${PLAIN}"
+}
+
+restart_service() { start_service; }
+show_log() { journalctl -u sing-box -f -n 50; }
+
 # ==========================================
-#  NFTables 规则生成 (防回环/防锁死)
+#  3. NFTables 规则 (已替换为修复版)
 # ==========================================
 configure_nftables_tproxy() {
     TP_PORT="7895"
