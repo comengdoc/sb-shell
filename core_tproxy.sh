@@ -1,316 +1,218 @@
 #!/bin/bash
 
-# ==========================================
-#  Sing-box 核心管理 (TProxy 旁路由整合版)
-#  功能: 下载安装、版本管理 + 修复后的旁路由网络逻辑
-#  修复: 2026-01-22 (增加内核模块自动加载 & 依赖补全)
-# ==========================================
+# =========================================================
+#  Sing-box Core Lite (R5C 旁路由适配版)
+#  兼容性: 完美适配 menu.sh / sub.sh
+#  核心逻辑: 仅代理局域网入站流量 (Prerouting)，本机直连 (No Output)
+# =========================================================
 
-# 开启兼容模式，防止 Sub-Store 转换的配置报错
-export ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true
-
+# --- 1. 变量定义 (保持与 menu.sh 兼容) ---
+WORKDIR="/etc/sbshell"
 SINGBOX_BIN="/usr/local/bin/sing-box"
-# 清理可能存在的干扰文件
-[ -f "/usr/bin/sing-box" ] && rm -f "/usr/bin/sing-box"
-
 CONFIG_DIR="/etc/sing-box"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 SERVICE_FILE="/etc/systemd/system/sing-box.service"
-WORKDIR="/etc/sbshell"
 
-# 定义颜色
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
-# ==========================================
-#  1. 状态检查与安装功能
-# ==========================================
+# --- 2. 辅助函数 ---
+check_root() {
+    [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限${PLAIN}" && exit 1
+}
+
+# 适配 menu.sh 的状态检查
 check_status() {
     if systemctl is-active --quiet sing-box; then
-        STATUS="${GREEN}运行中${PLAIN}"
+        STATUS="${GREEN}运行中 (TProxy)${PLAIN}"
     else
         STATUS="${RED}未运行${PLAIN}"
     fi
 
     if [ -f "$SINGBOX_BIN" ]; then
-        VER_RAW=$($SINGBOX_BIN version 2>/dev/null)
-        VER_NUM=$(echo "$VER_RAW" | grep -oE 'version [0-9.]+' | head -1 | awk '{print $2}')
-        TAG_FILE="$WORKDIR/.version_tag"
-        [ -f "$TAG_FILE" ] && TAG_INFO=" ($(cat "$TAG_FILE"))" || TAG_INFO=""
-        VER="${VER_NUM}${TAG_INFO}"
+        # 简单粗暴获取版本
+        VER_RAW=$($SINGBOX_BIN version 2>/dev/null | grep -oE 'version [0-9.]+' | head -1)
+        VER="${VER_RAW:-未知版本}"
     else
         VER="${RED}未安装${PLAIN}"
     fi
-
-    echo -e "运行状态: ${STATUS}  |  当前版本: ${GREEN}${VER}${PLAIN}  |  架构: ${CYAN}TProxy Only${PLAIN}"
+    # 输出格式适配 menu.sh
+    echo -e "运行状态: ${STATUS}  |  当前版本: ${GREEN}${VER}${PLAIN}  |  模式: ${CYAN}旁路由(本机直连)${PLAIN}"
 }
 
-install_official() {
-    echo -e "${GREEN}正在准备安装 Sing-box [Official/SagerNet]...${PLAIN}"
-    install_deps
-    
-    ARCH=$(uname -m)
-    case $ARCH in
-        aarch64|armv8) ARCH_CODE="linux-arm64" ;;
-        x86_64|amd64)  ARCH_CODE="linux-amd64" ;;
-        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
-    esac
-
-    echo -e "${YELLOW}正在查询最新版本...${PLAIN}"
-    API_URL="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
-    LATEST_TAG=$(curl -sL --retry 3 "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-    
-    if [[ -z "$LATEST_TAG" ]]; then
-        read -p "API 获取失败，请输入版本号 (例如 v1.11.0): " LATEST_TAG
-        [[ -z "$LATEST_TAG" ]] && return
-    fi
-    
-    VERSION_NO_V=${LATEST_TAG#v}
-    FILE_NAME="sing-box-${VERSION_NO_V}-${ARCH_CODE}.tar.gz"
-    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_TAG}/${FILE_NAME}"
-
-    install_download_logic "$DOWNLOAD_URL" "Official"
-}
-
-install_ref1nd() {
-    echo -e "${GREEN}正在准备安装 Sing-box [Ref1nd] (更多协议/去广告)...${PLAIN}"
-    install_deps
-
-    ARCH=$(uname -m)
-    case $ARCH in
-        aarch64|armv8) FILE_NAME="sing-box-ref1nd-main-linux-armv8.tar.gz" ;;
-        x86_64|amd64)  FILE_NAME="sing-box-ref1nd-main-linux-amd64.tar.gz" ;;
-        *) echo -e "${RED}不支持的架构: $ARCH${PLAIN}"; return ;;
-    esac
-
-    DOWNLOAD_URL="https://github.com/DustinWin/proxy-tools/releases/download/sing-box/${FILE_NAME}"
-    install_download_logic "$DOWNLOAD_URL" "Ref1nd"
-}
-
+# --- 3. 依赖安装 (极简版) ---
 install_deps() {
-    # 2026-01-22 修复：增加对 chrony, ca-certificates, iproute2 的检查
-    echo -e "${YELLOW}正在检查系统依赖...${PLAIN}"
-    if command -v apt-get >/dev/null; then
-        apt-get update
-        apt-get install -y curl wget tar nftables git jq ca-certificates iproute2 chrony tzdata
-        systemctl enable --now chrony >/dev/null 2>&1
-    elif command -v apk >/dev/null; then
-        apk add curl wget tar nftables git jq ca-certificates iproute2 chrony tzdata
-        rc-service chronyd start
-    fi
+    echo -e "${YELLOW}正在检查必要依赖 (chrony, nftables)...${PLAIN}"
+    # 仅安装核心组件，去除 git/jq/unzip 等冗余
+    apt-get update -q
+    apt-get install -y curl wget tar nftables iproute2 ca-certificates chrony
+    systemctl enable --now chrony >/dev/null 2>&1
+    mkdir -p "$WORKDIR" "$CONFIG_DIR"
 }
 
-install_download_logic() {
-    URL="$1"
-    LABEL="$2"
-    TMP_DIR=$(mktemp -d)
+# --- 4. 安装逻辑 (适配 install_official / install_ref1nd) ---
+install_logic() {
+    REPO="$1" # SagerNet 或 DustinWin
+    NAME="$2" # Official 或 Ref1nd
     
-    echo -e "正在下载: $URL"
-    wget -T 60 -t 3 -U "Mozilla/5.0" -O "$TMP_DIR/sb.tar.gz" "$URL" || { echo -e "${RED}下载失败${PLAIN}"; rm -rf "$TMP_DIR"; return; }
-    
-    tar -zxvf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR" >/dev/null 2>&1
-    BINARY_FOUND=$(find "$TMP_DIR" -type f \( -name "sing-box" -o -name "CrashCore" \) | head -n 1)
+    install_deps
+    echo -e "${GREEN}正在安装 Sing-box [${NAME}]...${PLAIN}"
 
-    if [[ -n "$BINARY_FOUND" ]]; then
-        systemctl stop sing-box 2>/dev/null
-        cp -f "$BINARY_FOUND" "$SINGBOX_BIN"
-        chmod +x "$SINGBOX_BIN"
-        
-        mkdir -p "$WORKDIR" "$CONFIG_DIR"
-        chmod 777 "$CONFIG_DIR"
-        echo "$LABEL" > "$WORKDIR/.version_tag"
-        
-        install_ui
-        write_service
-        echo -e "${GREEN}核心部署成功 [${LABEL}]${PLAIN}"
+    # 获取最新 Release (使用 grep/sed 替代 jq)
+    if [ "$NAME" == "Official" ]; then
+        API_URL="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+        TAG=$(curl -sL "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        FILE="sing-box-${TAG#v}-linux-arm64.tar.gz"
+        URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/${FILE}"
     else
-        echo -e "${RED}未找到二进制文件${PLAIN}"
+        # Ref1nd 固定链接逻辑
+        URL="https://github.com/DustinWin/proxy-tools/releases/download/sing-box/sing-box-ref1nd-main-linux-armv8.tar.gz"
     fi
-    rm -rf "$TMP_DIR"
-}
 
-install_ui() {
-    if [ ! -d "$WORKDIR/ui/assets" ]; then
-        echo -e "${YELLOW}正在安装 Yacd Dashboard UI...${PLAIN}"
-        mkdir -p "$WORKDIR/ui"
-        TMP_UI=$(mktemp -d)
-        curl -sL -o "$TMP_UI/ui.zip" "https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip"
-        unzip -o -q "$TMP_UI/ui.zip" -d "$TMP_UI"
-        cp -r "$TMP_UI/Yacd-meta-gh-pages"/* "$WORKDIR/ui/" 2>/dev/null
-        rm -rf "$TMP_UI"
+    echo -e "下载地址: $URL"
+    TMP_DIR=$(mktemp -d)
+    wget -q --show-progress -O "$TMP_DIR/sb.tar.gz" "$URL"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}下载失败${PLAIN}"; rm -rf "$TMP_DIR"; return
     fi
-}
 
-write_service() {
-    cat > $SERVICE_FILE <<SYSTEMD
+    tar -zxf "$TMP_DIR/sb.tar.gz" -C "$TMP_DIR"
+    
+    # 查找并移动二进制
+    find "$TMP_DIR" -type f -name "sing-box" -exec cp -f {} "$SINGBOX_BIN" \;
+    chmod +x "$SINGBOX_BIN"
+    
+    # 写入 Systemd (极简配置)
+    cat > $SERVICE_FILE <<EOF
 [Unit]
-Description=sing-box service (TProxy)
-Documentation=https://sing-box.sagernet.org
+Description=Sing-box TProxy (Lite)
 After=network.target nss-lookup.target network-online.target
 
 [Service]
 User=root
 Group=root
-Environment="ENABLE_DEPRECATED_SPECIAL_OUTBOUNDS=true"
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=$SINGBOX_BIN run -c $CONFIG_FILE -D $CONFIG_DIR
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=10s
-LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
-SYSTEMD
-
+EOF
     systemctl daemon-reload
-    systemctl enable sing-box >/dev/null 2>&1
+    rm -rf "$TMP_DIR"
+    echo -e "${GREEN}安装完成 [${NAME}]${PLAIN}"
 }
 
-# ==========================================
-#  2. 核心网络逻辑 (修复版)
-# ==========================================
-start_service() {
-    echo -e "${YELLOW}正在启动 Sing-box (旁路由 TProxy 模式)...${PLAIN}"
+# 导出函数供 menu.sh 调用
+install_official() { install_logic "SagerNet" "Official"; }
+install_ref1nd()   { install_logic "DustinWin" "Ref1nd"; }
 
-    # 0. 【关键修复】强制加载 NFTables TProxy 和 NAT 所需的内核模块
-    #    解决 "nft_nat" 未加载导致 masquerade 失败的问题
-    echo -e "正在加载内核模块..."
-    modprobe nft_tproxy >/dev/null 2>&1
-    modprobe nft_socket >/dev/null 2>&1
-    modprobe nf_conntrack >/dev/null 2>&1
-    modprobe nf_nat >/dev/null 2>&1
+# --- 5. 核心网络逻辑 (Start/Stop) ---
 
-    # 1. 内核参数优化 (旁路由三件套)
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    sysctl -w net.ipv4.conf.all.src_valid_mark=1 >/dev/null 2>&1
+# 定义 NFTables 规则函数 (内部调用)
+configure_nftables_lite() {
+    # 自动获取物理网卡接口 (用于 NAT)
+    OUT_INTF=$(ip route show | grep default | awk '{print $5}' | head -1)
+    [[ -z "$OUT_INTF" ]] && OUT_INTF="eth0"
     
-    # 【重要】关闭 ICMP 重定向，防止设备跳过旁路由
-    sysctl -w net.ipv4.conf.all.send_redirects=0 >/dev/null 2>&1
-    sysctl -w net.ipv4.conf.default.send_redirects=0 >/dev/null 2>&1
-    
-    # 【重要】宽松的反向路径过滤，防止丢包
-    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
-    sysctl -w net.ipv4.conf.default.rp_filter=2 >/dev/null 2>&1
+    TP_PORT="7895" # 必须对应 config.json
 
-    # 2. 路由策略清理与重建
-    ip rule del from 192.168.0.0/16 lookup 2022 >/dev/null 2>&1
-    ip rule del fwmark 1 table 100 >/dev/null 2>&1
-    ip route del local 0.0.0.0/0 dev lo table 100 >/dev/null 2>&1
+    echo -e "应用规则: ${CYAN}TProxy (LAN Only)${PLAIN} -> 出口: ${GREEN}$OUT_INTF${PLAIN}"
 
-    # 配置策略路由：打标流量 -> 查表100 -> 送入本地回环
-    ip rule add fwmark 1 table 100
-    ip route add local 0.0.0.0/0 dev lo table 100
-
-    # 3. 加载 NFTables 规则
-    configure_nftables_tproxy
-
-    # 4. 配置强制 NAT (旁路由必须！)
-    DEFAULT_IF="eth0"
-    
-    nft add table ip singbox 2>/dev/null
-    nft add chain ip singbox nat_postrouting { type nat hook postrouting priority 100 \; } 2>/dev/null
-    nft flush chain ip singbox nat_postrouting 2>/dev/null
-    
-    # 【核心】所有出站流量进行伪装，解决三角路由回程问题
-    # 依赖 nf_nat 模块
-    if [ -n "$DEFAULT_IF" ]; then
-        nft add rule ip singbox nat_postrouting oifname "$DEFAULT_IF" masquerade 2>/dev/null
-        echo -e "NAT 接口 (Masquerade): ${CYAN}$DEFAULT_IF${PLAIN}"
-    else
-        echo -e "${RED}警告: 未找到 eth0 网卡，NAT 可能失败${PLAIN}"
-    fi
-
-    # 5. 启动服务
-    systemctl restart sing-box
-    sleep 1
-    
-    if systemctl is-active --quiet sing-box; then 
-        echo -e "${GREEN}服务启动成功 (旁路由模式 Ready)${PLAIN}"
-    else 
-        echo -e "${RED}启动失败，请检查日志 (journalctl -u sing-box -n 20)${PLAIN}"
-        stop_service
-    fi
-}
-
-stop_service() {
-    systemctl stop sing-box
-    # 清理 NFTables
-    nft delete table ip singbox 2>/dev/null
-    # 清理路由策略
-    ip rule del fwmark 1 table 100 2>/dev/null
-    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
-    echo -e "${GREEN}服务已停止并清理规则${PLAIN}"
-}
-
-restart_service() { start_service; }
-show_log() { journalctl -u sing-box -f -n 50; }
-
-# ==========================================
-#  3. NFTables 规则
-# ==========================================
-configure_nftables_tproxy() {
-    TP_PORT="7895"
-    
-    # 自动获取本机 IP，防止把自己锁在外面
-    LOCAL_IPS=$(ip addr | grep 'inet ' | awk '{print $2}' | sed 's/\/.*//' | tr '\n' ',' | sed 's/,$//')
-
-    echo -e "TProxy 监听端口: ${CYAN}${TP_PORT}${PLAIN}"
-    echo -e "本机 IP 豁免: ${CYAN}${LOCAL_IPS}${PLAIN}"
-
-    nft flush ruleset 2>/dev/null
+    nft flush ruleset
     nft -f - <<NFT
 table ip singbox {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
-        
-        # 1. 基础豁免
-        ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } return
-        
-        # 2. 【防锁死】豁免发往 R5C 本机的流量 (SSH, 面板, DNS)
-        ip daddr { $LOCAL_IPS } return
-        
-        # 3. 【防掉线】豁免 DHCP 广播 (UDP 67/68)
-        udp sport { 67, 68 } return
-        udp dport { 67, 68 } return
 
-        # 4. 豁免局域网互访 (LAN to LAN)
-        # 确保这里涵盖了你的所有内网段
+        # 1. 豁免保留地址和广播
+        ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } return
+        # 2. 豁免局域网 (避免回环)
         ip daddr { 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } return
 
-        # 5. 劫持剩余所有 TCP/UDP 流量 -> TProxy
+        # 3. 劫持局域网流量 (不包含本机流量，因为 Output 链不存在)
         meta l4proto { tcp, udp } meta mark set 1 tproxy to :$TP_PORT accept
     }
-    chain output {
-        type route hook output priority mangle; policy accept;
-        
-        # 1. 基础豁免
-        ip daddr { 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } return
-        ip daddr { 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12 } return
-        ip daddr { $LOCAL_IPS } return
 
-        # 2. 【防死循环核心】
-        # 匹配 JSON 中 "➡️ 直连" 的 routing_mark: 255
-        meta mark 255 return
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
         
-        # 3. 豁免 NTP (防止时间同步死循环)
-        udp dport 123 return
+        # 4. 旁路由必须做 Masquerade (源地址伪装)
+        oifname "$OUT_INTF" masquerade
     }
 }
 NFT
 }
 
-# 增加菜单调用 (可选)
-case "\$1" in
-    start) start_service ;;
-    stop) stop_service ;;
-    restart) restart_service ;;
-    log) show_log ;;
-    install_off) install_official ;;
-    install_ref) install_ref1nd ;;
-    *) echo "Usage: \$0 {start|stop|restart|log|install_off|install_ref}" ;;
-esac
+start_service() {
+    echo -e "${YELLOW}正在启动服务 (Lite模式)...${PLAIN}"
+    
+    # 1. 加载模块 (防患未然)
+    modprobe nft_tproxy 2>/dev/null
+    modprobe nft_socket 2>/dev/null
+    modprobe nf_nat 2>/dev/null
+
+    # 2. 开启转发
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+    sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null
+    sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null
+
+    # 3. 设置策略路由 (将标记为1的流量送入本地回路)
+    ip rule del fwmark 1 table 100 2>/dev/null
+    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
+    
+    ip rule add fwmark 1 table 100
+    ip route add local 0.0.0.0/0 dev lo table 100
+
+    # 4. 应用 NFT 规则
+    configure_nftables_lite
+
+    # 5. 启动进程
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}启动成功${PLAIN}"
+    else
+        echo -e "${RED}启动失败，请检查配置${PLAIN}"
+        journalctl -u sing-box -n 10 --no-pager
+    fi
+}
+
+stop_service() {
+    systemctl stop sing-box
+    # 清理规则
+    nft flush ruleset
+    ip rule del fwmark 1 table 100 2>/dev/null
+    ip route del local 0.0.0.0/0 dev lo table 100 2>/dev/null
+    echo -e "${GREEN}服务已停止，网络恢复直连${PLAIN}"
+}
+
+restart_service() {
+    start_service
+}
+
+show_log() {
+    journalctl -u sing-box -f -n 50
+}
+
+# --- 6. 命令行入口 (兼容 source 调用) ---
+# 如果脚本被直接执行，则处理参数；如果被 source，则忽略
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    case "$1" in
+        start) start_service ;;
+        stop) stop_service ;;
+        restart) restart_service ;;
+        install_off) install_official ;;
+        install_ref) install_ref1nd ;;
+        log) show_log ;;
+        *) echo "Usage: $0 {start|stop|restart|log|install_off|install_ref}" ;;
+    esac
+fi
