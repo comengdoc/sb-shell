@@ -1,50 +1,44 @@
 {
-  "dns": {
-    "servers": [
-      {
-        "tag": "local",
-        "type": "udp",
-        "server": "114.114.114.114"
-      },
-      {
-        "tag": "public",
-        "type": "udp",
-        "server": "223.5.5.5"
-      },
-      {
-        "tag": "foreign",
-        "type": "tls", 
-        "server": "8.8.8.8",
-        "server_port": 853
-      },
-      {
-        "tag": "fakeip",
-        "type": "fakeip",
-        "inet4_range": "198.18.0.0/15",
-        "inet6_range": "fc00::/18"
-      }
-    ],
-    "rules": [
-      {
-        "rule_set": [
-          "geosite-cn",
-          "geosite-private"
-        ],
-        "server": "local"
-      },
-      {
-        "query_type": [
-          "A",
-          "AAAA"
-        ],
-        "server": "fakeip",
-        "rewrite_ttl": 1
-      }
-    ],
-    "final": "foreign",
-    "strategy": "ipv4_only",
-    "independent_cache": true
-  },
+"dns": {
+  "servers": [
+    {
+      "tag": "local",
+      "type": "udp",
+      "server": "223.5.5.5", 
+      "detour": "direct"    
+    },
+    {
+      "tag": "foreign",
+      "type": "tls",
+      "server": "8.8.8.8",
+      "server_port": 853,
+      "detour": "🍣 日本自动"
+    },
+    {
+      "tag": "fakeip",
+      "type": "fakeip",
+      "inet4_range": "198.18.0.0/15"
+    }
+  ],
+  "rules": [
+    {
+      "query_type": ["AAAA"],
+      "action": "reject"    
+    },
+    {
+      "rule_set": ["geosite-cn", "geosite-private"],
+      "server": "local"
+    },
+    {
+      "query_type": ["A"],   
+      "server": "fakeip",
+      "rewrite_ttl": 1
+    }
+  ],
+  "final": "foreign",
+  "strategy": "ipv4_only",
+  "independent_cache": true
+},
   "outbounds": [
     {
       "tag": "🚀 节点选择",
@@ -695,34 +689,31 @@
       }
     ],
     "final": "🕸️ 兜底策略",
-    "auto_detect_interface": false,
+    "auto_detect_interface": true,
     "default_mark": 255,
     "default_domain_resolver": {
-      "server": "public"
+      "server": "local"
     }
   },
-  "inbounds": [
-    {
-      "type": "tproxy",
-      "tag": "tproxy-in",
-      "listen": "0.0.0.0",
-      "listen_port": 7895,
-      "sniff": true,
-      "sniff_override_destination": true
-    },
-    {
-      "type": "direct",
-      "tag": "dns-in",
-      "listen": "0.0.0.0",
-      "listen_port": 53
-    },
-    {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "0.0.0.0",
-      "listen_port": 7890
-    }
-  ],
+ "inbounds": [
+  {
+    "type": "tproxy",
+    "tag": "tproxy-in",
+    "listen": "::",        
+    "listen_port": 7895,
+    "tcp_fast_open": true,     
+    "udp_fragment": true,       
+    "sniff": true
+  },
+  {
+    "type": "mixed",
+    "tag": "mixed-in",
+    "listen": "::",        
+    "listen_port": 7890,
+    "tcp_fast_open": true,      
+    "udp_fragment": true        
+  }
+],
   "experimental": {
     "cache_file": {
       "enabled": true,
