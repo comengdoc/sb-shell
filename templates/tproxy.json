@@ -1,44 +1,79 @@
 {
-"dns": {
-  "servers": [
-    {
-      "tag": "local",
-      "type": "udp",
-      "server": "223.5.5.5", 
-      "detour": "direct"    
-    },
-    {
-      "tag": "foreign",
-      "type": "tls",
-      "server": "8.8.8.8",
-      "server_port": 853,
-      "detour": "🍣 日本自动"
-    },
-    {
-      "tag": "fakeip",
-      "type": "fakeip",
+  "log": {
+    "disabled": false,
+    "level": "info",
+    "timestamp": true
+  },
+  "cache_file": {
+    "enabled": true,
+    "path": "/etc/sing-box/cache.db",
+    "store_rdrc": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "address": "223.5.5.5",
+        "detour": "direct"
+      },
+      {
+        "tag": "foreign",
+        "address": "tls://8.8.8.8",
+        "detour": "🍣 日本自动"
+      },
+      {
+        "tag": "fakeip",
+        "address": "fakeip"
+      }
+    ],
+    "fakeip": {
+      "enabled": true,
       "inet4_range": "198.18.0.0/15"
-    }
-  ],
-  "rules": [
+    },
+    "rules": [
+      {
+        "query_type": [
+          "AAAA"
+        ],
+        "action": "reject"
+      },
+      {
+        "rule_set": [
+          "geosite-cn",
+          "geosite-private"
+        ],
+        "server": "local"
+      },
+      {
+        "query_type": [
+          "A"
+        ],
+        "server": "fakeip",
+        "rewrite_ttl": 1
+      }
+    ],
+    "final": "foreign",
+    "strategy": "ipv4_only",
+    "independent_cache": true
+  },
+  "inbounds": [
     {
-      "query_type": ["AAAA"],
-      "action": "reject"    
+      "type": "tproxy",
+      "tag": "tproxy-in",
+      "listen": "::",
+      "listen_port": 7895,
+      "tcp_fast_open": true,
+      "udp_fragment": true
     },
     {
-      "rule_set": ["geosite-cn", "geosite-private"],
-      "server": "local"
-    },
-    {
-      "query_type": ["A"],   
-      "server": "fakeip",
-      "rewrite_ttl": 1
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": 7890,
+      "tcp_fast_open": true,
+      "udp_fragment": true
     }
   ],
-  "final": "foreign",
-  "strategy": "ipv4_only",
-  "independent_cache": true
-},
   "outbounds": [
     {
       "tag": "🚀 节点选择",
@@ -695,30 +730,7 @@
       "server": "local"
     }
   },
- "inbounds": [
-  {
-    "type": "tproxy",
-    "tag": "tproxy-in",
-    "listen": "::",        
-    "listen_port": 7895,
-    "tcp_fast_open": true,     
-    "udp_fragment": true,       
-    "sniff": true
-  },
-  {
-    "type": "mixed",
-    "tag": "mixed-in",
-    "listen": "::",        
-    "listen_port": 7890,
-    "tcp_fast_open": true,      
-    "udp_fragment": true        
-  }
-],
   "experimental": {
-    "cache_file": {
-      "enabled": true,
-      "path": "/etc/sing-box/cache.db"
-    },
     "clash_api": {
       "external_controller": "0.0.0.0:9095",
       "external_ui": "/etc/sing-box/ui",
@@ -727,10 +739,5 @@
       "secret": "",
       "default_mode": "rule"
     }
-  },
-  "log": {
-    "disabled": false,
-    "level": "info",
-    "timestamp": true
   }
 }
